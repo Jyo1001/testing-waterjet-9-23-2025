@@ -1,3 +1,4 @@
+' codex/fix-orientation-of-assembly-part-y3d47d
 Option Explicit
 
 ' ========= Units =========
@@ -515,387 +516,22 @@ nextItem:
     nestAsm.ForceRebuild3 False
 End Sub
 
-' Orient each newly inserted part so the thinnest axis aligns with the assembly Top plane
-' codex/fix-compile-error-at-thinaxisindex-5tl2al
+' Keep each newly inserted part in its native orientation; drawing views now decide the DXF face
 Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
                                       comp As SldWorks.Component2, _
                                       pi As clsPlaceItem)
 
     On Error Resume Next
-    Const AXIS_ALIGN_EPS As Double = 0.000001
-    Const TOP_PLANE_GAP_TOL_M As Double = ORIENTATION_TOP_PLANE_TOL_IN * IN_TO_M
     If comp Is Nothing Then Exit Sub
 
-    EnsureResolved comp
-    EnsureComponentIsFloat comp, nestAsm
-
-    Dim partDoc As SldWorks.ModelDoc2
-    Set partDoc = comp.GetModelDoc2
-
-    Dim hasLargestFace As Boolean
-    Dim largestFaceNormal(0 To 2) As Double
-    Dim largestFaceArea As Double
-    If Not partDoc Is Nothing Then
-        hasLargestFace = TryGetLargestPlanarFaceNormal(partDoc, _
-            largestFaceNormal(0), largestFaceNormal(1), largestFaceNormal(2), largestFaceArea)
-    End If
-
-    Dim partLabel As String
-    partLabel = GetFileName(pi.FullPath) & " (" & pi.Config & ")"
-
-    Dim thinAxisIdx As Long
-    thinAxisIdx = pi.thinAxis
-    If thinAxisIdx < 0 Or thinAxisIdx > 2 Then
-        Dim compDx As Double, compDy As Double, compDz As Double
-        If TryGetBBoxInches_ComponentOnly(comp, compDx, compDy, compDz) Then
-            thinAxisIdx = IndexOfMin3(compDx, compDy, compDz)
-        Else
-            If partDoc Is Nothing Then Set partDoc = comp.GetModelDoc2
-            If Not partDoc Is Nothing Then
-                thinAxisIdx = DetermineThinAxisIndex(partDoc, compDx, compDy, compDz)
-                If Not hasLargestFace Then
-                    hasLargestFace = TryGetLargestPlanarFaceNormal(partDoc, _
-                        largestFaceNormal(0), largestFaceNormal(1), largestFaceNormal(2), largestFaceArea)
-                End If
-            End If
-        End If
-        If thinAxisIdx >= 0 And thinAxisIdx <= 2 Then
-            pi.thinAxis = thinAxisIdx
-        Else
-            LogMessage "[WARN] Unable to resolve thin axis for " & pi.FullPath & _
-                " (" & pi.Config & ")"
-        End If
-    End If
-
-    Dim baseTransform As SldWorks.MathTransform
-    Set baseTransform = comp.Transform2
-    If baseTransform Is Nothing Then
-        LogMessage "[WARN] Orientation skipped (no transform) for " & pi.FullPath & " (" & pi.Config & ")"
-
-        Exit Sub
-    End If
-
-    Dim baseData As Variant: baseData = baseTransform.ArrayData
-    If IsEmpty(baseData) Or UBound(baseData) < 14 Then
-        LogMessage "[WARN] Orientation skipped (no transform data) for " & pi.FullPath & " (" & pi.Config & ")"
-        Exit Sub
-    End If
-
-    Dim mathUtil As SldWorks.MathUtility
-    If g_swApp Is Nothing Then Set g_swApp = Application.SldWorks
-    Set mathUtil = g_swApp.GetMathUtility
-    If mathUtil Is Nothing Then
-        LogMessage "[WARN] Orientation skipped (no MathUtility) for " & pi.FullPath & " (" & pi.Config & ")"
-        Exit Sub
-    End If
-
-    Dim baseRot As Variant
-    baseRot = ExtractRotationMatrix(baseData)
-    If IsEmpty(baseRot) Then
-        LogMessage "[WARN] Orientation skipped (invalid base rotation) for " & pi.FullPath & " (" & pi.Config & ")"
-        Exit Sub
-    End If
-
-    Dim bestMatrix As Variant: bestMatrix = baseRot
-    Dim bestScore As Double: bestScore = 1000000000#
-    Dim bestFound As Boolean
-
-    Dim bestAxisMatrix As Variant
-    Dim bestAxisAlign As Double: bestAxisAlign = -1#
-    Dim bestAxisPlanar As Double: bestAxisPlanar = 1000000000#
-    Dim bestAxisFound As Boolean
-
-    Dim bestFaceMatrix As Variant
-    Dim bestFaceAlignment As Double: bestFaceAlignment = -1#
-    Dim bestFacePlanar As Double: bestFacePlanar = 1000000000#
-    Dim bestFaceAxisComponent As Double: bestFaceAxisComponent = -2#
-    Dim bestFaceFound As Boolean
-codex/fix-orientation-of-assembly-part-bsaaop
-
-    Dim candidateMatrices As Collection
-    Set candidateMatrices = BuildOrientationCandidateMatrices(baseRot, thinAxisIdx, hasLargestFace, largestFaceNormal)
-    If candidateMatrices Is Nothing Then
-        Set candidateMatrices = New Collection
-        candidateMatrices.Add baseRot
-    End If
-
-    Dim newR As Variant
-    For Each newR In candidateMatrices
-
-
- main
-        Dim candidateTransform As SldWorks.MathTransform
-        Set candidateTransform = CreateTransformFromMatrix(baseData, newR, mathUtil)
-        If candidateTransform Is Nothing Then GoTo nextRot
-
-        comp.SetTransformAndSolve2 candidateTransform
-
-        Dim hasScore As Boolean
-        Dim score As Double
-        Dim axisPlanar As Double
-        Dim axisAlign As Double
-        Dim axisOk As Boolean
-
-        If thinAxisIdx >= 0 And thinAxisIdx <= 2 Then
-            axisOk = EvaluateThinAxisAlignment(newR, thinAxisIdx, axisPlanar, axisAlign)
-            If axisOk Then
-                Dim betterAxis As Boolean
-                betterAxis = (axisAlign > bestAxisAlign + AXIS_ALIGN_EPS)
-                If Not betterAxis Then
-                    If Abs(axisAlign - bestAxisAlign) <= AXIS_ALIGN_EPS Then
-                        betterAxis = (axisPlanar < bestAxisPlanar - AXIS_ALIGN_EPS)
-                    End If
-                End If
-
-                If betterAxis Then
-                    bestAxisMatrix = newR
-                    bestAxisAlign = axisAlign
-                    bestAxisPlanar = axisPlanar
-                    bestAxisFound = True
-                End If
-                score = OrientationMatrixScore(axisPlanar, axisAlign)
-                hasScore = True
-            End If
-        End If
-
-        If hasLargestFace Then
-            Dim facePlanarErr As Double, faceAxisComponent As Double
-            Dim faceAlignment As Double
-            faceAlignment = EvaluateFaceAlignment(newR, largestFaceNormal(0), largestFaceNormal(1), _
-                largestFaceNormal(2), facePlanarErr, faceAxisComponent)
-            If faceAlignment > 0# Then
-                Dim betterFace As Boolean
-                betterFace = (faceAlignment > bestFaceAlignment + AXIS_ALIGN_EPS)
-                If Not betterFace Then
-                    If Abs(faceAlignment - bestFaceAlignment) <= AXIS_ALIGN_EPS Then
-                        betterFace = (facePlanarErr < bestFacePlanar - AXIS_ALIGN_EPS)
-                        If Not betterFace Then
-                            betterFace = (faceAxisComponent > bestFaceAxisComponent + AXIS_ALIGN_EPS)
-                        End If
-                    End If
-                End If
-
-                If betterFace Or Not bestFaceFound Then
-                    bestFaceMatrix = newR
-                    bestFaceAlignment = faceAlignment
-                    bestFacePlanar = facePlanarErr
-                    bestFaceAxisComponent = faceAxisComponent
-                    bestFaceFound = True
-                End If
-            End If
-        End If
-
-        If Not hasScore Then
-            Dim isZThin As Boolean, thicknessDiff As Double
-            Dim measured As Double, zDelta As Double
-            Dim planeGapTmp As Double
-
-            If EvaluateOrientationMetrics(comp, pi, isZThin, thicknessDiff, measured, zDelta, planeGapTmp) Then
-                score = OrientationCandidateScoreFromBBox(isZThin, thicknessDiff, zDelta)
-                hasScore = True
-            End If
-        End If
-
-        If hasScore Then
-            If (Not bestFound) Or score < bestScore Then
-                bestMatrix = newR
-                bestScore = score
-                bestFound = True
-            End If
-        End If
-'codex/fix-compile-error-at-thinaxisindex-5tl2al
-nextRot:
-    Next newR
-
-    Dim finalMatrix As Variant
-    Dim usedFaceMatrix As Boolean
-
-    If bestFaceFound And bestFaceAlignment >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL Then
-        finalMatrix = bestFaceMatrix
-        usedFaceMatrix = True
-    ElseIf bestAxisFound Then
-        finalMatrix = bestAxisMatrix
-    ElseIf bestFound Then
-        finalMatrix = bestMatrix
-    Else
-        finalMatrix = baseRot
-    End If
-
-    Dim finalTransform As SldWorks.MathTransform
-    Set finalTransform = CreateTransformFromMatrix(baseData, finalMatrix, mathUtil)
-    If finalTransform Is Nothing Then
-        Set finalTransform = baseTransform
-        finalMatrix = baseRot
-    End If
-
-    Dim applyOk As Variant
-    applyOk = comp.SetTransformAndSolve2(finalTransform)
-    If VarType(applyOk) = vbBoolean Then
-        If Not CBool(applyOk) Then
-            LogMessage "[WARN] Failed to apply orientation transform for " & pi.FullPath & _
-                " (" & pi.Config & ")"
-        End If
-    End If
-
-    Dim planeShiftIn As Double
-    planeShiftIn = 0#
-
-    Dim finalBox As Variant
-    finalBox = SafeGetBox(comp)
-    If IsValidBox(finalBox) Then
-        Dim zMinM As Double
-        zMinM = CDbl(finalBox(2))
-        If Abs(zMinM) > TOP_PLANE_GAP_TOL_M Then
-            Dim finalData As Variant
-            finalData = finalTransform.ArrayData
-            If Not IsEmpty(finalData) And UBound(finalData) >= 14 Then
-                finalData(14) = CDbl(finalData(14)) - zMinM
-                Dim adjustedTransform As SldWorks.MathTransform
-                Set adjustedTransform = mathUtil.CreateTransform(finalData)
-                If Not adjustedTransform Is Nothing Then
-                    Set finalTransform = adjustedTransform
-                    comp.SetTransformAndSolve2 finalTransform
-                    planeShiftIn = Abs(zMinM) * M_TO_IN
-                    finalBox = SafeGetBox(comp)
-                End If
-            End If
-        End If
-    End If
-
-    Dim matrixEvalOk As Boolean
-    Dim finalPlanarErr As Double, finalAxisAlign As Double
-    If thinAxisIdx >= 0 And thinAxisIdx <= 2 Then
-        matrixEvalOk = EvaluateThinAxisAlignment(finalMatrix, thinAxisIdx, finalPlanarErr, finalAxisAlign)
-    End If
-
-    Dim finalFaceAlignment As Double
-    Dim finalFacePlanar As Double
-    Dim finalFaceAxisComponent As Double
-    Dim finalFaceOk As Boolean
-
-    Dim finalIsZThin As Boolean, finalDiff As Double
-    Dim finalMeasured As Double, finalZDelta As Double
-    Dim measurementOk As Boolean
-    Dim finalPlaneGapIn As Double
-
-    measurementOk = EvaluateOrientationMetrics(comp, pi, finalIsZThin, finalDiff, finalMeasured, finalZDelta, finalPlaneGapIn)
-    If Not measurementOk Then
-        nestAsm.EditRebuild3
-        measurementOk = EvaluateOrientationMetrics(comp, pi, finalIsZThin, finalDiff, finalMeasured, finalZDelta, finalPlaneGapIn)
-    End If
-
-    If hasLargestFace Then
-        finalFaceAlignment = EvaluateFaceAlignment(finalMatrix, largestFaceNormal(0), largestFaceNormal(1), _
-            largestFaceNormal(2), finalFacePlanar, finalFaceAxisComponent)
-        finalFaceOk = (finalFaceAlignment >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL)
-    Else
-        finalFaceOk = True
-    End If
-
-    Dim axisAlignedOk As Boolean: axisAlignedOk = True
-    Dim planeGapOk As Boolean
-    planeGapOk = (measurementOk And finalPlaneGapIn <= ORIENTATION_TOP_PLANE_TOL_IN)
-
-    If thinAxisIdx >= 0 Then
-        If matrixEvalOk Then
-            axisAlignedOk = (finalAxisAlign >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL And finalPlanarErr <= ORIENTATION_AXIS_ALIGNMENT_TOL)
-        ElseIf measurementOk Then
-            axisAlignedOk = finalIsZThin
-        Else
-            axisAlignedOk = False
-        End If
-    End If
-
-    Dim faceAlignedOk As Boolean
-    faceAlignedOk = finalFaceOk
-
-    Dim orientationAligned As Boolean
-    orientationAligned = (axisAlignedOk And planeGapOk And faceAlignedOk)
-
-    Dim faceStatusMsg As String
-    If hasLargestFace Then
-        faceStatusMsg = "; largest face |Z|=" & Format$(finalFaceAlignment, "0.000")
-        If Not finalFaceOk Then faceStatusMsg = faceStatusMsg & " (NOT aligned)"
-    End If
-
-    If planeShiftIn > 0# Then
-        LogMessage "[PLACE] Shifted " & partLabel & " by " & Format$(planeShiftIn, "0.###") & " in to rest on Top plane"
-    End If
-
-    If usedFaceMatrix And hasLargestFace Then
-        Dim faceAreaIn2 As Double
-        faceAreaIn2 = largestFaceArea * (M_TO_IN * M_TO_IN)
-        LogMessage "[PLACE] Using largest face alignment for " & partLabel & _
-            " (|Z|=" & Format$(finalFaceAlignment, "0.000") & ", area=" & _
-            Format$(faceAreaIn2, "0.0") & " in^2)"
-    End If
-
-    If orientationAligned Then
-        If measurementOk Then
-            Dim thicknessMsg As String
-            thicknessMsg = "thickness " & Format$(finalMeasured, "0.###") & " in"
-            If pi.ThicknessIn > 0# Then
-                thicknessMsg = thicknessMsg & " (? " & Format$(finalDiff, "0.###") & " in)"
-            End If
-            Dim thicknessWarn As Boolean
-            thicknessWarn = (pi.ThicknessIn > 0# And Abs(finalDiff) > ORIENTATION_THICKNESS_TOL_IN)
-
-            If matrixEvalOk Then
-                LogMessage "[CHECK] Orientation OK for " & partLabel & ": thin axis -> Top (|Z|=" & _
-                    Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000") & ", plane gap=" & _
-                    Format$(finalPlaneGapIn, "0.000") & " in); " & thicknessMsg & faceStatusMsg
-            Else
-                LogMessage "[CHECK] Orientation OK for " & partLabel & ": " & thicknessMsg & _
-                    " (bbox ?Z=" & Format$(finalZDelta, "0.###") & " in, plane gap=" & _
-                    Format$(finalPlaneGapIn, "0.000") & " in)" & faceStatusMsg
-            End If
-
-            If thicknessWarn Then
-                LogMessage "[WARN] Thickness mismatch after orientation for " & partLabel & _
-                    ": expected " & Format$(pi.ThicknessIn, "0.###") & " in, measured " & _
-                    Format$(finalMeasured, "0.###") & " in"
-            End If
-        ElseIf matrixEvalOk Then
-            LogMessage "[CHECK] Orientation OK for " & partLabel & ": thin axis -> Top (|Z|=" & _
-                Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000") & _
-                ", plane gap=" & Format$(finalPlaneGapIn, "0.000") & " in); thickness check unavailable" & faceStatusMsg
-        Else
-            LogMessage "[CHECK] Orientation OK for " & partLabel & ": verification limited (plane gap=" & _
-                Format$(finalPlaneGapIn, "0.000") & " in)" & faceStatusMsg
-        End If
-    Else
-        If Not planeGapOk And measurementOk Then
-            LogMessage "[ERROR] Part not resting on Top plane for " & partLabel & _
-                ": gap=" & Format$(finalPlaneGapIn, "0.###") & " in"
-        End If
-
-        If Not faceAlignedOk And hasLargestFace Then
-            LogMessage "[ERROR] Largest face not aligned with Top plane for " & partLabel & _
-                ": |Z|=" & Format$(finalFaceAlignment, "0.000")
-        End If
-
-        If Not axisAlignedOk Then
-            If matrixEvalOk Then
-                LogMessage "[ERROR] Thin axis misaligned for " & partLabel & ": |Z|=" & _
-                    Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000")
-            ElseIf measurementOk Then
-                LogMessage "[ERROR] Thin axis not aligned with Top plane for " & partLabel & _
-                    "; Z delta=" & Format$(finalZDelta, "0.###") & " in"
-            Else
-                LogMessage "[WARN] Unable to verify orientation for " & pi.FullPath & " (" & pi.Config & ")"
-            End If
-        ElseIf planeGapOk Then
-            If faceAlignedOk Then
-                LogMessage "[WARN] Orientation check inconclusive for " & partLabel
-            End If
-        Else
-            LogMessage "[WARN] Unable to verify orientation for " & pi.FullPath & " (" & pi.Config & ")"
-        End If
-    End If
+    ' Keep the component in its default orientation (origin-to-origin) as dictated by the
+    ' updated workflow. Previously we attempted to reorient each part so the thinnest axis
+    ' and largest face pointed “up”, but this produced inconsistent results. The DXF export
+    ' routine now evaluates standard drawing views and picks the largest projected area, so
+    ' no rotation is applied here.
+    FixComponentInAssembly comp, nestAsm
 
     On Error GoTo 0
-
-    FixComponentInAssembly comp, nestAsm
 End Sub
 
 Private Function OrientationCandidateScoreFromBBox(isZThin As Boolean, _
@@ -1452,26 +1088,85 @@ Private Sub ExportAssemblyTopDXF(swApp As SldWorks.SldWorks, _
         LogDriveMappings
     End If
 
-    ' 3) Create ONLY a Top view, at 1:1 (scale parameter = 1#)
-    g_LastStep = "[DXF] CreateDrawViewFromModelView3(*Top)"
+    ' 3) Create Top, Front, and Right views at 1:1 scale and keep the largest projection
+    g_LastStep = "[DXF] Create standard views"
+    Dim createdViews As New Collection
+
     Dim topV As SldWorks.View
-    Set topV = dd.CreateDrawViewFromModelView3(asmPath, "*Top", 0.3, 0.22, 1#)
-    If topV Is Nothing Then
-        Set topV = dd.CreateDrawViewFromModelView3(asmPath, "Top", 0.3, 0.22, 1#)
+    Set topV = CreateStandardDrawingView(dd, asmPath, Array("*Top", "Top"), 0.3, 0.22, "Top")
+    If Not topV Is Nothing Then
+        Dim topEntry As Variant
+        topEntry = Array(topV, "Top")
+        createdViews.Add topEntry
     End If
-    If topV Is Nothing Then
-        LogMessage "Could not create Top view for " & asmPath, True
+
+    Dim frontV As SldWorks.View
+    Set frontV = CreateStandardDrawingView(dd, asmPath, Array("*Front", "Front"), 0.3, 0.05, "Front")
+    If Not frontV Is Nothing Then
+        Dim frontEntry As Variant
+        frontEntry = Array(frontV, "Front")
+        createdViews.Add frontEntry
+    End If
+
+    Dim rightV As SldWorks.View
+    Set rightV = CreateStandardDrawingView(dd, asmPath, Array("*Right", "Right", "*Side"), 0.55, 0.22, "Right")
+    If Not rightV Is Nothing Then
+        Dim rightEntry As Variant
+        rightEntry = Array(rightV, "Right")
+        createdViews.Add rightEntry
+    End If
+
+    If createdViews.Count = 0 Then
+        LogMessage "[DXF] Could not create any standard views for " & asmPath, True
         drw.Quit
         Exit Sub
     End If
 
-    ' Force 1:1 via the correct property (some versions ignore the ctor scale)
-    On Error Resume Next
-    topV.ScaleDecimal = 1#
-    On Error GoTo 0
+    drw.ForceRebuild3 False
 
-    ' 4) Remove any other views
-    DeleteAllViewsExcept dd, topV.Name
+    Dim bestView As SldWorks.View
+    Dim bestLabel As String
+    Dim bestArea As Double: bestArea = -1#
+
+    Dim entry As Variant
+    For Each entry In createdViews
+        Dim curView As SldWorks.View
+        Dim label As String
+        If IsArray(entry) Then
+            Set curView = entry(0)
+            label = CStr(entry(1))
+        End If
+
+        If Not curView Is Nothing Then
+            Dim area As Double
+            area = GetViewOutlineArea(curView)
+            LogMessage "[DXF] " & label & " view area=" & Format$(area, "0.0000")
+            If area > bestArea Then
+                bestArea = area
+                Set bestView = curView
+                bestLabel = label
+            End If
+        End If
+    Next entry
+
+    If bestView Is Nothing Then
+        entry = createdViews(1)
+        If IsArray(entry) Then
+            Set bestView = entry(0)
+            bestLabel = CStr(entry(1))
+            bestArea = GetViewOutlineArea(bestView)
+        End If
+    End If
+
+    If bestView Is Nothing Then
+        LogMessage "[DXF] Unable to determine a largest view for " & asmPath, True
+        drw.Quit
+        Exit Sub
+    End If
+
+    LogMessage "[DXF] Retaining " & bestLabel & " view for DXF (area=" & Format$(bestArea, "0.0000") & ")"
+
+    DeleteAllViewsExcept dd, bestView.Name
 
     ' 5) Save DXF
     g_LastStep = "[DXF] SaveAs4"
@@ -1541,6 +1236,60 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     Next
     On Error GoTo 0
 End Sub
+
+' Create a named standard view (Top/Front/Right) with 1:1 scale
+Private Function CreateStandardDrawingView(dd As SldWorks.DrawingDoc, _
+                                           asmPath As String, _
+                                           orientationNames As Variant, _
+                                           posX As Double, _
+                                           posY As Double, _
+                                           label As String) As SldWorks.View
+
+    On Error Resume Next
+
+    Dim v As SldWorks.View
+    Dim i As Long
+    If IsArray(orientationNames) Then
+        For i = LBound(orientationNames) To UBound(orientationNames)
+            Dim viewName As String
+            viewName = CStr(orientationNames(i))
+            If Len(viewName) > 0 Then
+                Set v = dd.CreateDrawViewFromModelView3(asmPath, viewName, posX, posY, 1#)
+                If Not v Is Nothing Then Exit For
+            End If
+        Next i
+    End If
+
+    If v Is Nothing Then
+        LogMessage "[DXF] Could not create " & label & " view for " & asmPath
+        On Error GoTo 0
+        Exit Function
+    End If
+
+    v.ScaleDecimal = 1#
+    On Error GoTo 0
+
+    Set CreateStandardDrawingView = v
+End Function
+
+' Measure projected area of a drawing view via its outline
+Private Function GetViewOutlineArea(v As SldWorks.View) As Double
+    On Error Resume Next
+    If v Is Nothing Then Exit Function
+
+    Dim outline As Variant
+    outline = v.GetOutline
+    If IsArray(outline) Then
+        If UBound(outline) >= 3 Then
+            Dim width As Double
+            Dim height As Double
+            width = Abs(CDbl(outline(2)) - CDbl(outline(0)))
+            height = Abs(CDbl(outline(3)) - CDbl(outline(1)))
+            GetViewOutlineArea = width * height
+        End If
+    End If
+    On Error GoTo 0
+End Function
 
 ' =========================
 '     UNITS: force IPS
@@ -1858,3 +1607,4 @@ fail:
 End Sub
 
 
+ main
