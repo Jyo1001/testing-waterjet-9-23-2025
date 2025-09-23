@@ -19,7 +19,4 @@ End Property
 
 Public Property Let ThinAxisIndex(ByVal value As Long)
     thinAxis = value
- main
 End Property
-
-

@@ -17,6 +17,7 @@ Private Const SHEET_FORMAT_PATH As String = _
 Private Const ORIENTATION_AXIS_TOL_IN As Double = 0.01
 Private Const ORIENTATION_THICKNESS_TOL_IN As Double = 0.01
 Private Const ORIENTATION_AXIS_ALIGNMENT_TOL As Double = 0.001
+Private Const ORIENTATION_TOP_PLANE_TOL_IN As Double = 0.001
 
 ' ========= Globals (used by frmNest) =========
 Public g_SelectedIndices As Collection
@@ -481,7 +482,7 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
 
         Dim placements As Long: placements = 1
         If pi.Count > 1 Then
-            LogMessage "[INFO] Qty " & pi.Count & " requested for " & GetFileName(pi.FullPath) & " (" & pi.Config & ") — placing single instance"
+            LogMessage "[INFO] Qty " & pi.Count & " requested for " & GetFileName(pi.FullPath) & " (" & pi.Config & ") - placing single instance"
         End If
 
         For n = 1 To placements
@@ -522,10 +523,14 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
 
     On Error Resume Next
     Const AXIS_ALIGN_EPS As Double = 0.000001
+    Const TOP_PLANE_GAP_TOL_M As Double = ORIENTATION_TOP_PLANE_TOL_IN * IN_TO_M
     If comp Is Nothing Then Exit Sub
 
     EnsureResolved comp
     EnsureComponentIsFloat comp, nestAsm
+
+    Dim partLabel As String
+    partLabel = GetFileName(pi.FullPath) & " (" & pi.Config & ")"
 
     Dim thinAxisIdx As Long
     thinAxisIdx = pi.thinAxis
@@ -577,16 +582,13 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
         Exit Sub
     End If
 
-' codex/fix-compile-error-at-thinaxisindex-5tl2al
     Dim candidates As Collection
     Set candidates = BuildOrientationCandidateRotations()
 
-    Dim bestTransform As SldWorks.MathTransform: Set bestTransform = baseTransform
     Dim bestMatrix As Variant: bestMatrix = baseRot
     Dim bestScore As Double: bestScore = 1000000000#
     Dim bestFound As Boolean
 
-    Dim bestAxisTransform As SldWorks.MathTransform
     Dim bestAxisMatrix As Variant
     Dim bestAxisAlign As Double: bestAxisAlign = -1#
     Dim bestAxisPlanar As Double: bestAxisPlanar = 1000000000#
@@ -601,7 +603,6 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
         Dim candidateTransform As SldWorks.MathTransform
         Set candidateTransform = CreateTransformFromMatrix(baseData, newR, mathUtil)
         If candidateTransform Is Nothing Then GoTo nextRot
-'codex/fix-compile-error-at-thinaxisindex-5tl2al
 
         comp.SetTransformAndSolve2 candidateTransform
 
@@ -623,7 +624,6 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
                 End If
 
                 If betterAxis Then
-                    Set bestAxisTransform = candidateTransform
                     bestAxisMatrix = newR
                     bestAxisAlign = axisAlign
                     bestAxisPlanar = axisPlanar
@@ -637,8 +637,9 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
         If Not hasScore Then
             Dim isZThin As Boolean, thicknessDiff As Double
             Dim measured As Double, zDelta As Double
+            Dim planeGapTmp As Double
 
-            If EvaluateOrientationMetrics(comp, pi, isZThin, thicknessDiff, measured, zDelta) Then
+            If EvaluateOrientationMetrics(comp, pi, isZThin, thicknessDiff, measured, zDelta, planeGapTmp) Then
                 score = OrientationCandidateScoreFromBBox(isZThin, thicknessDiff, zDelta)
                 hasScore = True
             End If
@@ -646,7 +647,6 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
 
         If hasScore Then
             If (Not bestFound) Or score < bestScore Then
-                Set bestTransform = candidateTransform
                 bestMatrix = newR
                 bestScore = score
                 bestFound = True
@@ -656,16 +656,19 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
 nextRot:
     Next rot
 
-    Dim finalTransform As SldWorks.MathTransform
     Dim finalMatrix As Variant
 
     If bestAxisFound Then
-        Set finalTransform = bestAxisTransform
         finalMatrix = bestAxisMatrix
     ElseIf bestFound Then
-        Set finalTransform = bestTransform
         finalMatrix = bestMatrix
     Else
+        finalMatrix = baseRot
+    End If
+
+    Dim finalTransform As SldWorks.MathTransform
+    Set finalTransform = CreateTransformFromMatrix(baseData, finalMatrix, mathUtil)
+    If finalTransform Is Nothing Then
         Set finalTransform = baseTransform
         finalMatrix = baseRot
     End If
@@ -679,6 +682,31 @@ nextRot:
         End If
     End If
 
+    Dim planeShiftIn As Double
+    planeShiftIn = 0#
+
+    Dim finalBox As Variant
+    finalBox = SafeGetBox(comp)
+    If IsValidBox(finalBox) Then
+        Dim zMinM As Double
+        zMinM = CDbl(finalBox(2))
+        If Abs(zMinM) > TOP_PLANE_GAP_TOL_M Then
+            Dim finalData As Variant
+            finalData = finalTransform.ArrayData
+            If Not IsEmpty(finalData) And UBound(finalData) >= 14 Then
+                finalData(14) = CDbl(finalData(14)) - zMinM
+                Dim adjustedTransform As SldWorks.MathTransform
+                Set adjustedTransform = mathUtil.CreateTransform(finalData)
+                If Not adjustedTransform Is Nothing Then
+                    Set finalTransform = adjustedTransform
+                    comp.SetTransformAndSolve2 finalTransform
+                    planeShiftIn = Abs(zMinM) * M_TO_IN
+                    finalBox = SafeGetBox(comp)
+                End If
+            End If
+        End If
+    End If
+
     Dim matrixEvalOk As Boolean
     Dim finalPlanarErr As Double, finalAxisAlign As Double
     If thinAxisIdx >= 0 And thinAxisIdx <= 2 Then
@@ -688,23 +716,32 @@ nextRot:
     Dim finalIsZThin As Boolean, finalDiff As Double
     Dim finalMeasured As Double, finalZDelta As Double
     Dim measurementOk As Boolean
+    Dim finalPlaneGapIn As Double
 
-    measurementOk = EvaluateOrientationMetrics(comp, pi, finalIsZThin, finalDiff, finalMeasured, finalZDelta)
+    measurementOk = EvaluateOrientationMetrics(comp, pi, finalIsZThin, finalDiff, finalMeasured, finalZDelta, finalPlaneGapIn)
     If Not measurementOk Then
         nestAsm.EditRebuild3
-        measurementOk = EvaluateOrientationMetrics(comp, pi, finalIsZThin, finalDiff, finalMeasured, finalZDelta)
+        measurementOk = EvaluateOrientationMetrics(comp, pi, finalIsZThin, finalDiff, finalMeasured, finalZDelta, finalPlaneGapIn)
+    End If
+
+    Dim axisAlignedOk As Boolean
+    Dim planeGapOk As Boolean
+    planeGapOk = (measurementOk And finalPlaneGapIn <= ORIENTATION_TOP_PLANE_TOL_IN)
+
+    If matrixEvalOk Then
+        axisAlignedOk = (finalAxisAlign >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL And finalPlanarErr <= ORIENTATION_AXIS_ALIGNMENT_TOL)
+    ElseIf measurementOk Then
+        axisAlignedOk = finalIsZThin
+    Else
+        axisAlignedOk = False
     End If
 
     Dim orientationAligned As Boolean
-    If matrixEvalOk Then
-        orientationAligned = (finalAxisAlign >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL And finalPlanarErr <= ORIENTATION_AXIS_ALIGNMENT_TOL)
-    ElseIf measurementOk Then
-        orientationAligned = finalIsZThin
-    Else
-        orientationAligned = False
-    End If
+    orientationAligned = (axisAlignedOk And planeGapOk)
 
-    Dim partLabel As String: partLabel = GetFileName(pi.FullPath) & " (" & pi.Config & ")"
+    If planeShiftIn > 0# Then
+        LogMessage "[PLACE] Shifted " & partLabel & " by " & Format$(planeShiftIn, "0.###") & " in to rest on Top plane"
+    End If
 
     If orientationAligned Then
         If measurementOk Then
@@ -718,10 +755,12 @@ nextRot:
 
             If matrixEvalOk Then
                 LogMessage "[CHECK] Orientation OK for " & partLabel & ": thin axis -> Top (|Z|=" & _
-                    Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000") & "); " & thicknessMsg
+                    Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000") & ", plane gap=" & _
+                    Format$(finalPlaneGapIn, "0.000") & " in); " & thicknessMsg
             Else
                 LogMessage "[CHECK] Orientation OK for " & partLabel & ": " & thicknessMsg & _
-                    " (bbox ?Z=" & Format$(finalZDelta, "0.###") & " in)"
+                    " (bbox ?Z=" & Format$(finalZDelta, "0.###") & " in, plane gap=" & _
+                    Format$(finalPlaneGapIn, "0.000") & " in)"
             End If
 
             If thicknessWarn Then
@@ -731,17 +770,30 @@ nextRot:
             End If
         ElseIf matrixEvalOk Then
             LogMessage "[CHECK] Orientation OK for " & partLabel & ": thin axis -> Top (|Z|=" & _
-                Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000") & "); thickness check unavailable"
+                Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000") & _
+                ", plane gap=" & Format$(finalPlaneGapIn, "0.000") & " in); thickness check unavailable"
         Else
-            LogMessage "[CHECK] Orientation OK for " & partLabel & ": verification limited"
+            LogMessage "[CHECK] Orientation OK for " & partLabel & ": verification limited (plane gap=" & _
+                Format$(finalPlaneGapIn, "0.000") & " in)"
         End If
     Else
-        If matrixEvalOk Then
-            LogMessage "[ERROR] Thin axis misaligned for " & partLabel & ": |Z|=" & _
-                Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000")
-        ElseIf measurementOk Then
-            LogMessage "[ERROR] Thin axis not aligned with Top plane for " & partLabel & _
-                "; Z delta=" & Format$(finalZDelta, "0.###") & " in"
+        If Not planeGapOk And measurementOk Then
+            LogMessage "[ERROR] Part not resting on Top plane for " & partLabel & _
+                ": gap=" & Format$(finalPlaneGapIn, "0.###") & " in"
+        End If
+
+        If Not axisAlignedOk Then
+            If matrixEvalOk Then
+                LogMessage "[ERROR] Thin axis misaligned for " & partLabel & ": |Z|=" & _
+                    Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000")
+            ElseIf measurementOk Then
+                LogMessage "[ERROR] Thin axis not aligned with Top plane for " & partLabel & _
+                    "; Z delta=" & Format$(finalZDelta, "0.###") & " in"
+            Else
+                LogMessage "[WARN] Unable to verify orientation for " & pi.FullPath & " (" & pi.Config & ")"
+            End If
+        ElseIf planeGapOk Then
+            LogMessage "[WARN] Orientation check inconclusive for " & partLabel
         Else
             LogMessage "[WARN] Unable to verify orientation for " & pi.FullPath & " (" & pi.Config & ")"
         End If
@@ -921,22 +973,37 @@ Private Function EvaluateOrientationMetrics(comp As SldWorks.Component2, _
                                             ByRef isZThin As Boolean, _
                                             ByRef thicknessDiff As Double, _
                                             ByRef measuredThickness As Double, _
-                                            ByRef zAxisDelta As Double) As Boolean
+                                            ByRef zAxisDelta As Double, _
+                                            ByRef planeGapIn As Double) As Boolean
     On Error Resume Next
 
     EnsureResolved comp
 
-    Dim dx As Double, dy As Double, dz As Double
-    If Not TryGetBBoxInches_ComponentOnly(comp, dx, dy, dz) Then
+    Dim box As Variant
+    box = SafeGetBox(comp)
+    If Not IsValidBox(box) Then
         EvaluateOrientationMetrics = False
         On Error GoTo 0
         Exit Function
     End If
 
-    Dim minDim As Double: minDim = Min3(dx, dy, dz)
+    Dim minX As Double: minX = CDbl(box(0))
+    Dim minY As Double: minY = CDbl(box(1))
+    Dim minZ As Double: minZ = CDbl(box(2))
+    Dim maxX As Double: maxX = CDbl(box(3))
+    Dim maxY As Double: maxY = CDbl(box(4))
+    Dim maxZ As Double: maxZ = CDbl(box(5))
+
+    Dim spanXIn As Double: spanXIn = Abs(maxX - minX) * M_TO_IN
+    Dim spanYIn As Double: spanYIn = Abs(maxY - minY) * M_TO_IN
+    Dim spanZIn As Double: spanZIn = Abs(maxZ - minZ) * M_TO_IN
+
+    Dim minDim As Double: minDim = Min3(spanXIn, spanYIn, spanZIn)
     measuredThickness = minDim
-    zAxisDelta = Abs(dz - minDim)
+    zAxisDelta = Abs(spanZIn - minDim)
     isZThin = (zAxisDelta <= ORIENTATION_AXIS_TOL_IN)
+
+    planeGapIn = Abs(minZ) * M_TO_IN
 
     If pi.ThicknessIn > 0# Then
         thicknessDiff = Abs(minDim - pi.ThicknessIn)
