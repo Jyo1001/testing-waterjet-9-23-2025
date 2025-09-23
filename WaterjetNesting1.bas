@@ -146,6 +146,11 @@ Sub Waterjet_Nesting_Workflow()
         Dim niceName As String: niceName = Format(thkIn, "0.###") & " in thick sheet"
         LogMessage "Processing group: " & niceName
 
+        Dim groupFolder As String
+        groupFolder = outFolder & "\" & SanitizeFileName(niceName)
+        EnsureFolder groupFolder
+        LogMessage "[FOLDER] Output for group -> " & groupFolder
+
         ' Build items list
         g_LastStep = "[GROUP] MakePlacementList"
         Dim items As Collection: Set items = MakePlacementList(groups(k))
@@ -173,7 +178,7 @@ Sub Waterjet_Nesting_Workflow()
 
         ' Save unique (silent)
         g_LastStep = "[SAVE] SaveAs4"
-        Dim baseAsmPath As String: baseAsmPath = outFolder & "\" & SanitizeFileName(niceName) & ".SLDASM"
+        Dim baseAsmPath As String: baseAsmPath = groupFolder & "\" & SanitizeFileName(niceName) & ".SLDASM"
         Dim targetAsmPath As String: targetAsmPath = UniqueTargetPath(baseAsmPath)
         Dim e As Long, w As Long
         nestAsmModel.SaveAs4 targetAsmPath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, e, w
@@ -206,7 +211,10 @@ Sub Waterjet_Nesting_Workflow()
         ' Export top-view-only DXF at 1:1
         g_LastStep = "[DXF] export"
         Dim dxfPath As String: dxfPath = Replace$(targetAsmPath, ".SLDASM", ".DXF")
-        ExportAssemblyTopDXF swApp, drwTplDefault, targetAsmPath, dxfPath
+        ExportModelTopDXF swApp, drwTplDefault, targetAsmPath, dxfPath
+
+        ' Export individual DXFs for each unique part in this thickness group
+        ExportIndividualPartDXFs swApp, drwTplDefault, groups(k), groupFolder
 
 NextGroup:
     Next
@@ -1403,10 +1411,10 @@ End Function
 ' =========================
 '        DXF EXPORT (Top-only, 1:1)
 ' =========================
-Private Sub ExportAssemblyTopDXF(swApp As SldWorks.SldWorks, _
-                                 drwTplDefault As String, _
-                                 asmPath As String, _
-                                 outDXF As String)
+Private Sub ExportModelTopDXF(swApp As SldWorks.SldWorks, _
+                              drwTplDefault As String, _
+                              modelRefPath As String, _
+                              outDXF As String)
 
     On Error Resume Next
 
@@ -1423,6 +1431,8 @@ Private Sub ExportAssemblyTopDXF(swApp As SldWorks.SldWorks, _
     Else
         drwTplToUse = drwTplDefault
     End If
+
+    LogMessage "[DXF] Preparing drawing for " & modelRefPath & " -> " & outDXF
 
     g_LastStep = "[DXF] NewDocument"
     Dim drw As SldWorks.ModelDoc2: Set drw = swApp.NewDocument(drwTplToUse, 0, 0, 0)
@@ -1455,12 +1465,12 @@ Private Sub ExportAssemblyTopDXF(swApp As SldWorks.SldWorks, _
     ' 3) Create ONLY a Top view, at 1:1 (scale parameter = 1#)
     g_LastStep = "[DXF] CreateDrawViewFromModelView3(*Top)"
     Dim topV As SldWorks.View
-    Set topV = dd.CreateDrawViewFromModelView3(asmPath, "*Top", 0.3, 0.22, 1#)
+    Set topV = dd.CreateDrawViewFromModelView3(modelRefPath, "*Top", 0.3, 0.22, 1#)
     If topV Is Nothing Then
-        Set topV = dd.CreateDrawViewFromModelView3(asmPath, "Top", 0.3, 0.22, 1#)
+        Set topV = dd.CreateDrawViewFromModelView3(modelRefPath, "Top", 0.3, 0.22, 1#)
     End If
     If topV Is Nothing Then
-        LogMessage "Could not create Top view for " & asmPath, True
+        LogMessage "Could not create Top view for " & modelRefPath, True
         drw.Quit
         Exit Sub
     End If
@@ -1700,6 +1710,16 @@ Public Function GetFileName(p As String) As String
     If i > 0 Then GetFileName = Mid$(p, i + 1) Else GetFileName = p
 End Function
 
+Public Function GetFileBaseName(p As String) As String
+    Dim nm As String: nm = GetFileName(p)
+    Dim dotPos As Long: dotPos = InStrRev(nm, ".")
+    If dotPos > 0 Then
+        GetFileBaseName = Left$(nm, dotPos - 1)
+    Else
+        GetFileBaseName = nm
+    End If
+End Function
+
 Private Function GetParentFolder(p As String) As String
     Dim i As Long: i = InStrRev(p, "\")
     If i > 0 Then GetParentFolder = Left$(p, i - 1) Else GetParentFolder = CurDir$
@@ -1716,6 +1736,18 @@ Private Function SanitizeFileName(s As String) As String
         s = Replace$(s, CStr(bad(i)), "_")
     Next
     SanitizeFileName = s
+End Function
+
+Private Function BuildModelReferenceForDrawing(modelPath As String, cfg As String) As String
+    Dim p As String: p = Trim$(modelPath)
+    If Len(p) = 0 Then Exit Function
+
+    Dim c As String: c = Trim$(cfg)
+    If Len(c) > 0 Then
+        BuildModelReferenceForDrawing = p & "@" & c
+    Else
+        BuildModelReferenceForDrawing = p
+    End If
 End Function
 
 Private Function UniqueTargetPath(ByVal desired As String) As String
@@ -1855,6 +1887,45 @@ fail:
     If fnum <> 0 Then Close #fnum
     On Error GoTo 0
     LogMessage "[WARN] Failed to write quantity report: " & reportPath & " (" & errMsg & ")", True
+End Sub
+
+' Export DXFs for each unique part in a thickness group into the specified folder
+Private Sub ExportIndividualPartDXFs(swApp As SldWorks.SldWorks, _
+                                     drwTplDefault As String, _
+                                     thkGroup As Collection, _
+                                     groupFolder As String)
+
+    If thkGroup Is Nothing Then Exit Sub
+
+    Dim i As Long
+    For i = 1 To thkGroup.Count
+        Dim pr As clsPartRecord: Set pr = thkGroup(i)
+        If pr Is Nothing Then GoTo cont
+        If Len(Trim$(pr.FullPath)) = 0 Then
+            LogMessage "[DXF] Skip: empty path for part index " & CStr(i)
+            GoTo cont
+        End If
+
+        Dim baseName As String
+        baseName = GetFileBaseName(pr.FullPath)
+        If Len(Trim$(pr.Config)) > 0 Then baseName = baseName & " - " & pr.Config
+
+        Dim partDxfBase As String
+        partDxfBase = groupFolder & "\" & SanitizeFileName(baseName) & ".DXF"
+        Dim partDxfPath As String
+        partDxfPath = UniqueTargetPath(partDxfBase)
+
+        Dim modelRef As String
+        modelRef = BuildModelReferenceForDrawing(pr.FullPath, pr.Config)
+        If Len(modelRef) = 0 Then
+            LogMessage "[DXF] Skip: unable to determine model reference for " & pr.DisplayName
+            GoTo cont
+        End If
+
+        LogMessage "[DXF] Exporting part -> " & partDxfPath
+        ExportModelTopDXF swApp, drwTplDefault, modelRef, partDxfPath
+cont:
+    Next i
 End Sub
 
 
