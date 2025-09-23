@@ -277,6 +277,7 @@ Private Sub CollectAssemblyParts(swAsm As SldWorks.AssemblyDoc, _
             If Len(pth) = 0 Then
                 LogMessage "Skip: virtual part failed to export " & c.Name2
                 GoTo cont
+ codex/fix-orientation-of-assembly-part-2jfn26
             End If
         End If
 
@@ -293,6 +294,7 @@ Private Sub CollectAssemblyParts(swAsm As SldWorks.AssemblyDoc, _
                 LogMessage "Skip: bbox invalid for " & pth: GoTo cont
             End If
         End If
+ main
         If md4 Is Nothing Then Set md4 = c.GetModelDoc2
         Dim thinIdxModel As Long
         thinIdxModel = DetermineThinAxisIndex(md4, dxIn, dyIn, dzIn)
@@ -401,6 +403,7 @@ Private Sub FixComponentInAssembly(comp As SldWorks.Component2, asm As SldWorks.
     End If
     On Error GoTo 0
 End Sub
+ codex/fix-orientation-of-assembly-part-2jfn26
 
 Private Function EnsureExternalPathForVirtual(md As SldWorks.ModelDoc2, _
                                               ByVal suggestFolder As String, _
@@ -438,6 +441,7 @@ Private Function SafeAddComponent(ByVal asmDoc As Object, _
     On Error Resume Next
     Dim r As Object
 
+ main
     Set r = CallByName(asmDoc, "AddComponent5", VbMethod, filePath, 0, cfg, xM, yM, zM)
     If r Is Nothing Then
         Set r = CallByName(asmDoc, "AddComponent3", VbMethod, filePath, xM, yM, zM)
@@ -479,6 +483,7 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             LogMessage "Skip placement: empty file path for " & pi.Config
             GoTo nextItem
         End If
+ codex/fix-orientation-of-assembly-part-2jfn26
 
         Dim placements As Long: placements = 1
         If pi.Count > 1 Then
@@ -489,6 +494,7 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             Dim wM As Double: wM = pi.WidthIn * IN_TO_M
             Dim hM As Double: hM = pi.HeightIn * IN_TO_M
 
+ main
             If cursorX > 0 And (cursorX + wM) > targetRowWidthM Then
                 cursorX = 0
                 cursorY = cursorY + rowH + gapM
@@ -716,10 +722,12 @@ Private Function BuildAlignmentMatrixForVectors(srcX As Double, srcY As Double, 
         If pMag <= EPS Then
             px = -az: py = ax: pz = 0#
             pMag = Sqr(px * px + py * py + pz * pz)
+ codex/fix-orientation-of-assembly-part-2jfn26
         End If
         If pMag <= EPS Then
             px = 1#: py = 0#: pz = 0#: pMag = 1#
         End If
+main
         px = px / pMag: py = py / pMag: pz = pz / pMag
 
         result(0, 0) = 2# * px * px - 1#
@@ -1215,6 +1223,7 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     Dim sheetView As SldWorks.View: Set sheetView = dd.GetFirstView
     If sheetView Is Nothing Then Exit Sub
 
+ codex/fix-orientation-of-assembly-part-2jfn26
     Dim v As SldWorks.View: Set v = sheetView.GetNextView
     Do While Not v Is Nothing
         Dim nextView As SldWorks.View
@@ -1239,6 +1248,7 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     Loop
 
     dd.ForceRebuild3 False
+ main
     On Error GoTo 0
 End Sub
 
