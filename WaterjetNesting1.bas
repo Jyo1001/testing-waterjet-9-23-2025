@@ -529,6 +529,17 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
     EnsureResolved comp
     EnsureComponentIsFloat comp, nestAsm
 
+    Dim partDoc As SldWorks.ModelDoc2
+    Set partDoc = comp.GetModelDoc2
+
+    Dim hasLargestFace As Boolean
+    Dim largestFaceNormal(0 To 2) As Double
+    Dim largestFaceArea As Double
+    If Not partDoc Is Nothing Then
+        hasLargestFace = TryGetLargestPlanarFaceNormal(partDoc, _
+            largestFaceNormal(0), largestFaceNormal(1), largestFaceNormal(2), largestFaceArea)
+    End If
+
     Dim partLabel As String
     partLabel = GetFileName(pi.FullPath) & " (" & pi.Config & ")"
 
@@ -539,10 +550,13 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
         If TryGetBBoxInches_ComponentOnly(comp, compDx, compDy, compDz) Then
             thinAxisIdx = IndexOfMin3(compDx, compDy, compDz)
         Else
-            Dim partDoc As SldWorks.ModelDoc2
-            Set partDoc = comp.GetModelDoc2
+            If partDoc Is Nothing Then Set partDoc = comp.GetModelDoc2
             If Not partDoc Is Nothing Then
                 thinAxisIdx = DetermineThinAxisIndex(partDoc, compDx, compDy, compDz)
+                If Not hasLargestFace Then
+                    hasLargestFace = TryGetLargestPlanarFaceNormal(partDoc, _
+                        largestFaceNormal(0), largestFaceNormal(1), largestFaceNormal(2), largestFaceArea)
+                End If
             End If
         End If
         If thinAxisIdx >= 0 And thinAxisIdx <= 2 Then
@@ -582,9 +596,6 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
         Exit Sub
     End If
 
-    Dim candidates As Collection
-    Set candidates = BuildOrientationCandidateRotations()
-
     Dim bestMatrix As Variant: bestMatrix = baseRot
     Dim bestScore As Double: bestScore = 1000000000#
     Dim bestFound As Boolean
@@ -594,10 +605,21 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
     Dim bestAxisPlanar As Double: bestAxisPlanar = 1000000000#
     Dim bestAxisFound As Boolean
 
-    Dim rot As Variant
-    For Each rot In candidates
-        Dim newR As Variant
-        newR = MultiplyMatrix3x3(baseRot, rot)
+    Dim bestFaceMatrix As Variant
+    Dim bestFaceAlignment As Double: bestFaceAlignment = -1#
+    Dim bestFacePlanar As Double: bestFacePlanar = 1000000000#
+    Dim bestFaceAxisComponent As Double: bestFaceAxisComponent = -2#
+    Dim bestFaceFound As Boolean
+
+    Dim candidateMatrices As Collection
+    Set candidateMatrices = BuildOrientationCandidateMatrices(baseRot, thinAxisIdx, hasLargestFace, largestFaceNormal)
+    If candidateMatrices Is Nothing Then
+        Set candidateMatrices = New Collection
+        candidateMatrices.Add baseRot
+    End If
+
+    Dim newR As Variant
+    For Each newR In candidateMatrices
 
 
         Dim candidateTransform As SldWorks.MathTransform
@@ -634,6 +656,33 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
             End If
         End If
 
+        If hasLargestFace Then
+            Dim facePlanarErr As Double, faceAxisComponent As Double
+            Dim faceAlignment As Double
+            faceAlignment = EvaluateFaceAlignment(newR, largestFaceNormal(0), largestFaceNormal(1), _
+                largestFaceNormal(2), facePlanarErr, faceAxisComponent)
+            If faceAlignment > 0# Then
+                Dim betterFace As Boolean
+                betterFace = (faceAlignment > bestFaceAlignment + AXIS_ALIGN_EPS)
+                If Not betterFace Then
+                    If Abs(faceAlignment - bestFaceAlignment) <= AXIS_ALIGN_EPS Then
+                        betterFace = (facePlanarErr < bestFacePlanar - AXIS_ALIGN_EPS)
+                        If Not betterFace Then
+                            betterFace = (faceAxisComponent > bestFaceAxisComponent + AXIS_ALIGN_EPS)
+                        End If
+                    End If
+                End If
+
+                If betterFace Or Not bestFaceFound Then
+                    bestFaceMatrix = newR
+                    bestFaceAlignment = faceAlignment
+                    bestFacePlanar = facePlanarErr
+                    bestFaceAxisComponent = faceAxisComponent
+                    bestFaceFound = True
+                End If
+            End If
+        End If
+
         If Not hasScore Then
             Dim isZThin As Boolean, thicknessDiff As Double
             Dim measured As Double, zDelta As Double
@@ -652,13 +701,17 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
                 bestFound = True
             End If
         End If
- 'codex/fix-compile-error-at-thinaxisindex-5tl2al
+'codex/fix-compile-error-at-thinaxisindex-5tl2al
 nextRot:
-    Next rot
+    Next newR
 
     Dim finalMatrix As Variant
+    Dim usedFaceMatrix As Boolean
 
-    If bestAxisFound Then
+    If bestFaceFound And bestFaceAlignment >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL Then
+        finalMatrix = bestFaceMatrix
+        usedFaceMatrix = True
+    ElseIf bestAxisFound Then
         finalMatrix = bestAxisMatrix
     ElseIf bestFound Then
         finalMatrix = bestMatrix
@@ -713,6 +766,11 @@ nextRot:
         matrixEvalOk = EvaluateThinAxisAlignment(finalMatrix, thinAxisIdx, finalPlanarErr, finalAxisAlign)
     End If
 
+    Dim finalFaceAlignment As Double
+    Dim finalFacePlanar As Double
+    Dim finalFaceAxisComponent As Double
+    Dim finalFaceOk As Boolean
+
     Dim finalIsZThin As Boolean, finalDiff As Double
     Dim finalMeasured As Double, finalZDelta As Double
     Dim measurementOk As Boolean
@@ -724,23 +782,50 @@ nextRot:
         measurementOk = EvaluateOrientationMetrics(comp, pi, finalIsZThin, finalDiff, finalMeasured, finalZDelta, finalPlaneGapIn)
     End If
 
-    Dim axisAlignedOk As Boolean
+    If hasLargestFace Then
+        finalFaceAlignment = EvaluateFaceAlignment(finalMatrix, largestFaceNormal(0), largestFaceNormal(1), _
+            largestFaceNormal(2), finalFacePlanar, finalFaceAxisComponent)
+        finalFaceOk = (finalFaceAlignment >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL)
+    Else
+        finalFaceOk = True
+    End If
+
+    Dim axisAlignedOk As Boolean: axisAlignedOk = True
     Dim planeGapOk As Boolean
     planeGapOk = (measurementOk And finalPlaneGapIn <= ORIENTATION_TOP_PLANE_TOL_IN)
 
-    If matrixEvalOk Then
-        axisAlignedOk = (finalAxisAlign >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL And finalPlanarErr <= ORIENTATION_AXIS_ALIGNMENT_TOL)
-    ElseIf measurementOk Then
-        axisAlignedOk = finalIsZThin
-    Else
-        axisAlignedOk = False
+    If thinAxisIdx >= 0 Then
+        If matrixEvalOk Then
+            axisAlignedOk = (finalAxisAlign >= 1# - ORIENTATION_AXIS_ALIGNMENT_TOL And finalPlanarErr <= ORIENTATION_AXIS_ALIGNMENT_TOL)
+        ElseIf measurementOk Then
+            axisAlignedOk = finalIsZThin
+        Else
+            axisAlignedOk = False
+        End If
     End If
 
+    Dim faceAlignedOk As Boolean
+    faceAlignedOk = finalFaceOk
+
     Dim orientationAligned As Boolean
-    orientationAligned = (axisAlignedOk And planeGapOk)
+    orientationAligned = (axisAlignedOk And planeGapOk And faceAlignedOk)
+
+    Dim faceStatusMsg As String
+    If hasLargestFace Then
+        faceStatusMsg = "; largest face |Z|=" & Format$(finalFaceAlignment, "0.000")
+        If Not finalFaceOk Then faceStatusMsg = faceStatusMsg & " (NOT aligned)"
+    End If
 
     If planeShiftIn > 0# Then
         LogMessage "[PLACE] Shifted " & partLabel & " by " & Format$(planeShiftIn, "0.###") & " in to rest on Top plane"
+    End If
+
+    If usedFaceMatrix And hasLargestFace Then
+        Dim faceAreaIn2 As Double
+        faceAreaIn2 = largestFaceArea * (M_TO_IN * M_TO_IN)
+        LogMessage "[PLACE] Using largest face alignment for " & partLabel & _
+            " (|Z|=" & Format$(finalFaceAlignment, "0.000") & ", area=" & _
+            Format$(faceAreaIn2, "0.0") & " in^2)"
     End If
 
     If orientationAligned Then
@@ -756,11 +841,11 @@ nextRot:
             If matrixEvalOk Then
                 LogMessage "[CHECK] Orientation OK for " & partLabel & ": thin axis -> Top (|Z|=" & _
                     Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000") & ", plane gap=" & _
-                    Format$(finalPlaneGapIn, "0.000") & " in); " & thicknessMsg
+                    Format$(finalPlaneGapIn, "0.000") & " in); " & thicknessMsg & faceStatusMsg
             Else
                 LogMessage "[CHECK] Orientation OK for " & partLabel & ": " & thicknessMsg & _
                     " (bbox ?Z=" & Format$(finalZDelta, "0.###") & " in, plane gap=" & _
-                    Format$(finalPlaneGapIn, "0.000") & " in)"
+                    Format$(finalPlaneGapIn, "0.000") & " in)" & faceStatusMsg
             End If
 
             If thicknessWarn Then
@@ -771,15 +856,20 @@ nextRot:
         ElseIf matrixEvalOk Then
             LogMessage "[CHECK] Orientation OK for " & partLabel & ": thin axis -> Top (|Z|=" & _
                 Format$(finalAxisAlign, "0.000") & ", planar=" & Format$(finalPlanarErr, "0.000") & _
-                ", plane gap=" & Format$(finalPlaneGapIn, "0.000") & " in); thickness check unavailable"
+                ", plane gap=" & Format$(finalPlaneGapIn, "0.000") & " in); thickness check unavailable" & faceStatusMsg
         Else
             LogMessage "[CHECK] Orientation OK for " & partLabel & ": verification limited (plane gap=" & _
-                Format$(finalPlaneGapIn, "0.000") & " in)"
+                Format$(finalPlaneGapIn, "0.000") & " in)" & faceStatusMsg
         End If
     Else
         If Not planeGapOk And measurementOk Then
             LogMessage "[ERROR] Part not resting on Top plane for " & partLabel & _
                 ": gap=" & Format$(finalPlaneGapIn, "0.###") & " in"
+        End If
+
+        If Not faceAlignedOk And hasLargestFace Then
+            LogMessage "[ERROR] Largest face not aligned with Top plane for " & partLabel & _
+                ": |Z|=" & Format$(finalFaceAlignment, "0.000")
         End If
 
         If Not axisAlignedOk Then
@@ -793,7 +883,9 @@ nextRot:
                 LogMessage "[WARN] Unable to verify orientation for " & pi.FullPath & " (" & pi.Config & ")"
             End If
         ElseIf planeGapOk Then
-            LogMessage "[WARN] Orientation check inconclusive for " & partLabel
+            If faceAlignedOk Then
+                LogMessage "[WARN] Orientation check inconclusive for " & partLabel
+            End If
         Else
             LogMessage "[WARN] Unable to verify orientation for " & pi.FullPath & " (" & pi.Config & ")"
         End If
@@ -896,6 +988,208 @@ Private Function MultiplyMatrix3x3(a As Variant, b As Variant) As Variant
     MultiplyMatrix3x3 = res
 End Function
 
+Private Sub MultiplyMatrixVector3x3(mat As Variant, x As Double, y As Double, z As Double, _
+                                    ByRef outX As Double, ByRef outY As Double, ByRef outZ As Double)
+    outX = 0#: outY = 0#: outZ = 0#
+    On Error Resume Next
+    If IsEmpty(mat) Then Exit Sub
+    outX = CDbl(mat(0, 0)) * x + CDbl(mat(0, 1)) * y + CDbl(mat(0, 2)) * z
+    outY = CDbl(mat(1, 0)) * x + CDbl(mat(1, 1)) * y + CDbl(mat(1, 2)) * z
+    outZ = CDbl(mat(2, 0)) * x + CDbl(mat(2, 1)) * y + CDbl(mat(2, 2)) * z
+    On Error GoTo 0
+End Sub
+
+Private Function IdentityMatrix3() As Variant
+    Dim m(0 To 2, 0 To 2) As Double
+    m(0, 0) = 1#: m(1, 1) = 1#: m(2, 2) = 1#
+    IdentityMatrix3 = m
+End Function
+
+Private Function MatrixKey(mat As Variant) As String
+    If IsEmpty(mat) Then Exit Function
+    Dim key As String
+    Dim i As Long, j As Long
+    For i = 0 To 2
+        For j = 0 To 2
+            key = key & "|" & Format$(CDbl(mat(i, j)), "0.000000")
+        Next j
+    Next i
+    MatrixKey = key
+End Function
+
+Private Sub AddMatrixCandidate(ByRef col As Collection, ByRef seen As Object, candidate As Variant)
+    If col Is Nothing Then Exit Sub
+    If IsEmpty(candidate) Then Exit Sub
+    Dim key As String: key = MatrixKey(candidate)
+    If Len(key) = 0 Then Exit Sub
+    If seen Is Nothing Then
+        col.Add candidate
+    ElseIf Not seen.Exists(key) Then
+        seen.Add key, True
+        col.Add candidate
+    End If
+End Sub
+
+Private Function BuildAlignmentMatrixForVectors(srcX As Double, srcY As Double, srcZ As Double, _
+                                                dstX As Double, dstY As Double, dstZ As Double) As Variant
+    Const EPS As Double = 0.0000000001
+
+    Dim srcMag As Double
+    srcMag = Sqr(srcX * srcX + srcY * srcY + srcZ * srcZ)
+    If srcMag <= EPS Then Exit Function
+
+    Dim dstMag As Double
+    dstMag = Sqr(dstX * dstX + dstY * dstY + dstZ * dstZ)
+    If dstMag <= EPS Then Exit Function
+
+    Dim ax As Double, ay As Double, az As Double
+    ax = srcX / srcMag
+    ay = srcY / srcMag
+    az = srcZ / srcMag
+
+    Dim bx As Double, by As Double, bz As Double
+    bx = dstX / dstMag
+    by = dstY / dstMag
+    bz = dstZ / dstMag
+
+    Dim dotProd As Double
+    dotProd = ax * bx + ay * by + az * bz
+    If dotProd > 1# Then dotProd = 1#
+    If dotProd < -1# Then dotProd = -1#
+
+    Dim axisX As Double, axisY As Double, axisZ As Double
+    axisX = ay * bz - az * by
+    axisY = az * bx - ax * bz
+    axisZ = ax * by - ay * bx
+
+    Dim s As Double
+    s = Sqr(axisX * axisX + axisY * axisY + axisZ * axisZ)
+
+    Dim result(0 To 2, 0 To 2) As Double
+
+    If s <= EPS Then
+        If dotProd >= 1# - 0.0000001 Then
+            BuildAlignmentMatrixForVectors = IdentityMatrix3()
+            Exit Function
+        End If
+
+        Dim px As Double, py As Double, pz As Double
+        px = 0#: py = -az: pz = ay
+        Dim pMag As Double: pMag = Sqr(px * px + py * py + pz * pz)
+        If pMag <= EPS Then
+            px = -az: py = ax: pz = 0#
+            pMag = Sqr(px * px + py * py + pz * pz)
+        End If
+        If pMag <= EPS Then
+            px = 1#: py = 0#: pz = 0#: pMag = 1#
+        End If
+        px = px / pMag: py = py / pMag: pz = pz / pMag
+
+        result(0, 0) = 2# * px * px - 1#
+        result(0, 1) = 2# * px * py
+        result(0, 2) = 2# * px * pz
+        result(1, 0) = 2# * py * px
+        result(1, 1) = 2# * py * py - 1#
+        result(1, 2) = 2# * py * pz
+        result(2, 0) = 2# * pz * px
+        result(2, 1) = 2# * pz * py
+        result(2, 2) = 2# * pz * pz - 1#
+        BuildAlignmentMatrixForVectors = result
+        Exit Function
+    End If
+
+    axisX = axisX / s
+    axisY = axisY / s
+    axisZ = axisZ / s
+
+    Dim sinTheta As Double: sinTheta = s
+    Dim cosTheta As Double: cosTheta = dotProd
+    Dim oneMinusCos As Double: oneMinusCos = 1# - cosTheta
+
+    result(0, 0) = cosTheta + axisX * axisX * oneMinusCos
+    result(0, 1) = axisX * axisY * oneMinusCos - axisZ * sinTheta
+    result(0, 2) = axisX * axisZ * oneMinusCos + axisY * sinTheta
+    result(1, 0) = axisY * axisX * oneMinusCos + axisZ * sinTheta
+    result(1, 1) = cosTheta + axisY * axisY * oneMinusCos
+    result(1, 2) = axisY * axisZ * oneMinusCos - axisX * sinTheta
+    result(2, 0) = axisZ * axisX * oneMinusCos - axisY * sinTheta
+    result(2, 1) = axisZ * axisY * oneMinusCos + axisX * sinTheta
+    result(2, 2) = cosTheta + axisZ * axisZ * oneMinusCos
+
+    BuildAlignmentMatrixForVectors = result
+End Function
+
+Private Sub AddAlignmentBasedCandidates(result As Collection, seen As Object, baseRot As Variant, _
+                                        sourceX As Double, sourceY As Double, sourceZ As Double)
+    Const MIN_MAG As Double = 0.000000001
+    Dim mag As Double
+    mag = Sqr(sourceX * sourceX + sourceY * sourceY + sourceZ * sourceZ)
+    If mag <= MIN_MAG Then Exit Sub
+
+    Dim targetIndex As Long
+    For targetIndex = 0 To 1
+        Dim targetZ As Double
+        If targetIndex = 0 Then targetZ = 1# Else targetZ = -1#
+
+        Dim align As Variant
+        align = BuildAlignmentMatrixForVectors(sourceX, sourceY, sourceZ, 0#, 0#, targetZ)
+        If Not IsEmpty(align) Then
+            Dim aligned As Variant
+            aligned = MultiplyMatrix3x3(align, baseRot)
+            AddMatrixCandidate result, seen, aligned
+
+            Dim q As Long
+            For q = 1 To 3
+                Dim zRot As Variant
+                zRot = QuarterTurnMatrix(2, q)
+                Dim spun As Variant
+                spun = MultiplyMatrix3x3(zRot, aligned)
+                AddMatrixCandidate result, seen, spun
+            Next q
+        End If
+    Next targetIndex
+End Sub
+
+Private Function BuildOrientationCandidateMatrices(baseRot As Variant, _
+                                                   thinAxisIdx As Long, _
+                                                   hasLargestFace As Boolean, _
+                                                   ByRef largestFaceNormal() As Double) As Collection
+
+    Dim result As New Collection
+    Dim seen As Object: Set seen = CreateObject("Scripting.Dictionary")
+
+    AddMatrixCandidate result, seen, baseRot
+
+    Dim baseCandidates As Collection
+    Set baseCandidates = BuildOrientationCandidateRotations()
+
+    Dim rot As Variant
+    For Each rot In baseCandidates
+        Dim newR As Variant
+        newR = MultiplyMatrix3x3(baseRot, rot)
+        AddMatrixCandidate result, seen, newR
+    Next rot
+
+    Dim assemblyVec(0 To 2) As Double
+
+    If thinAxisIdx >= 0 And thinAxisIdx <= 2 Then
+        Dim axisVec(0 To 2) As Double
+        axisVec(0) = 0#: axisVec(1) = 0#: axisVec(2) = 0#
+        axisVec(thinAxisIdx) = 1#
+        MultiplyMatrixVector3x3 baseRot, axisVec(0), axisVec(1), axisVec(2), _
+            assemblyVec(0), assemblyVec(1), assemblyVec(2)
+        AddAlignmentBasedCandidates result, seen, baseRot, assemblyVec(0), assemblyVec(1), assemblyVec(2)
+    End If
+
+    If hasLargestFace Then
+        MultiplyMatrixVector3x3 baseRot, largestFaceNormal(0), largestFaceNormal(1), largestFaceNormal(2), _
+            assemblyVec(0), assemblyVec(1), assemblyVec(2)
+        AddAlignmentBasedCandidates result, seen, baseRot, assemblyVec(0), assemblyVec(1), assemblyVec(2)
+    End If
+
+    Set BuildOrientationCandidateMatrices = result
+End Function
+
 Private Function ExtractRotationMatrix(baseData As Variant) As Variant
     If IsEmpty(baseData) Then Exit Function
     If UBound(baseData) < 10 Then Exit Function
@@ -933,8 +1227,97 @@ Private Function EvaluateThinAxisAlignment(rot As Variant, _
     On Error GoTo 0
 End Function
 
+Private Function EvaluateFaceAlignment(rot As Variant, _
+                                       normalX As Double, _
+                                       normalY As Double, _
+                                       normalZ As Double, _
+                                       ByRef planarError As Double, _
+                                       ByRef axisComponent As Double) As Double
+    On Error Resume Next
+    If IsEmpty(rot) Then Exit Function
+
+    Dim ax As Double, ay As Double, az As Double
+    ax = CDbl(rot(0, 0)) * normalX + CDbl(rot(0, 1)) * normalY + CDbl(rot(0, 2)) * normalZ
+    ay = CDbl(rot(1, 0)) * normalX + CDbl(rot(1, 1)) * normalY + CDbl(rot(1, 2)) * normalZ
+    az = CDbl(rot(2, 0)) * normalX + CDbl(rot(2, 1)) * normalY + CDbl(rot(2, 2)) * normalZ
+
+    planarError = Sqr(ax * ax + ay * ay)
+    axisComponent = az
+
+    Dim mag As Double: mag = Sqr(ax * ax + ay * ay + az * az)
+    If mag > 0# Then
+        EvaluateFaceAlignment = Abs(az / mag)
+    End If
+    On Error GoTo 0
+End Function
+
 Private Function OrientationMatrixScore(planarError As Double, axisAlignment As Double) As Double
     OrientationMatrixScore = planarError * 1000# + (1# - axisAlignment)
+End Function
+
+Private Function TryGetLargestPlanarFaceNormal(partDoc As SldWorks.ModelDoc2, _
+                                               ByRef normalX As Double, _
+                                               ByRef normalY As Double, _
+                                               ByRef normalZ As Double, _
+                                               ByRef faceArea As Double) As Boolean
+    On Error Resume Next
+
+    If partDoc Is Nothing Then GoTo done
+    If partDoc.GetType <> swDocPART Then GoTo done
+
+    Dim part As SldWorks.PartDoc
+    Set part = partDoc
+    If part Is Nothing Then GoTo done
+
+    Dim faces As Variant
+    faces = part.GetFaces
+    If IsEmpty(faces) Then GoTo done
+    If Not IsArray(faces) Then GoTo done
+
+    Dim bestArea As Double: bestArea = 0#
+    Dim i As Long
+    For i = LBound(faces) To UBound(faces)
+        Dim face As SldWorks.Face2
+        Set face = faces(i)
+        If Not face Is Nothing Then
+            Dim surf As SldWorks.Surface
+            Set surf = face.GetSurface
+            If Not surf Is Nothing Then
+                If CBool(surf.IsPlane) Then
+                    Dim area As Double: area = Abs(face.GetArea)
+                    If area > bestArea Then
+                        Dim params As Variant
+                        params = surf.PlaneParams
+                        If IsArray(params) Then
+                            If UBound(params) >= 5 Then
+                                Dim nx As Double: nx = CDbl(params(3))
+                                Dim ny As Double: ny = CDbl(params(4))
+                                Dim nz As Double: nz = CDbl(params(5))
+                                Dim mag As Double: mag = Sqr(nx * nx + ny * ny + nz * nz)
+                                If mag > 0# Then
+                                    nx = nx / mag
+                                    ny = ny / mag
+                                    nz = nz / mag
+                                    bestArea = area
+                                    normalX = nx
+                                    normalY = ny
+                                    normalZ = nz
+                                End If
+                            End If
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    Next i
+
+    If bestArea > 0# Then
+        faceArea = bestArea
+        TryGetLargestPlanarFaceNormal = True
+    End If
+
+done:
+    On Error GoTo 0
 End Function
 
 Private Function CreateTransformFromMatrix(baseData As Variant, _
