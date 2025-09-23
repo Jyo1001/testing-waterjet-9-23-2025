@@ -277,7 +277,7 @@ Private Sub CollectAssemblyParts(swAsm As SldWorks.AssemblyDoc, _
             If Len(pth) = 0 Then
                 LogMessage "Skip: virtual part failed to export " & c.Name2
                 GoTo cont
- codex/fix-orientation-of-assembly-part-2jfn26
+ 'codex/fix-orientation-of-assembly-part-2jfn26
             End If
         End If
 
@@ -294,7 +294,7 @@ Private Sub CollectAssemblyParts(swAsm As SldWorks.AssemblyDoc, _
                 LogMessage "Skip: bbox invalid for " & pth: GoTo cont
             End If
         End If
- main
+
         If md4 Is Nothing Then Set md4 = c.GetModelDoc2
         Dim thinIdxModel As Long
         thinIdxModel = DetermineThinAxisIndex(md4, dxIn, dyIn, dzIn)
@@ -403,7 +403,7 @@ Private Sub FixComponentInAssembly(comp As SldWorks.Component2, asm As SldWorks.
     End If
     On Error GoTo 0
 End Sub
- codex/fix-orientation-of-assembly-part-2jfn26
+' codex/fix-orientation-of-assembly-part-2jfn26
 
 Private Function EnsureExternalPathForVirtual(md As SldWorks.ModelDoc2, _
                                               ByVal suggestFolder As String, _
@@ -441,7 +441,7 @@ Private Function SafeAddComponent(ByVal asmDoc As Object, _
     On Error Resume Next
     Dim r As Object
 
- main
+ 
     Set r = CallByName(asmDoc, "AddComponent5", VbMethod, filePath, 0, cfg, xM, yM, zM)
     If r Is Nothing Then
         Set r = CallByName(asmDoc, "AddComponent3", VbMethod, filePath, xM, yM, zM)
@@ -483,7 +483,7 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             LogMessage "Skip placement: empty file path for " & pi.Config
             GoTo nextItem
         End If
- codex/fix-orientation-of-assembly-part-2jfn26
+ 'codex/fix-orientation-of-assembly-part-2jfn26
 
         Dim placements As Long: placements = 1
         If pi.Count > 1 Then
@@ -494,7 +494,7 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             Dim wM As Double: wM = pi.WidthIn * IN_TO_M
             Dim hM As Double: hM = pi.HeightIn * IN_TO_M
 
- main
+
             If cursorX > 0 And (cursorX + wM) > targetRowWidthM Then
                 cursorX = 0
                 cursorY = cursorY + rowH + gapM
@@ -910,7 +910,7 @@ Private Function TryGetLargestPlanarFaceNormal(partDoc As SldWorks.ModelDoc2, _
     If partDoc Is Nothing Then GoTo done
     If partDoc.GetType <> swDocPART Then GoTo done
 
-    Dim part As SldWorks.PartDoc
+    Dim part As SldWorks.partDoc
     Set part = partDoc
     If part Is Nothing Then GoTo done
 
@@ -1015,23 +1015,23 @@ Private Function EvaluateOrientationMetrics(comp As SldWorks.Component2, _
         Exit Function
     End If
 
-    Dim minX As Double: minX = CDbl(box(0))
-    Dim minY As Double: minY = CDbl(box(1))
-    Dim minZ As Double: minZ = CDbl(box(2))
-    Dim maxX As Double: maxX = CDbl(box(3))
-    Dim maxY As Double: maxY = CDbl(box(4))
-    Dim maxZ As Double: maxZ = CDbl(box(5))
+    Dim minx As Double: minx = CDbl(box(0))
+    Dim miny As Double: miny = CDbl(box(1))
+    Dim minz As Double: minz = CDbl(box(2))
+    Dim maxx As Double: maxx = CDbl(box(3))
+    Dim maxy As Double: maxy = CDbl(box(4))
+    Dim maxz As Double: maxz = CDbl(box(5))
 
-    Dim spanXIn As Double: spanXIn = Abs(maxX - minX) * M_TO_IN
-    Dim spanYIn As Double: spanYIn = Abs(maxY - minY) * M_TO_IN
-    Dim spanZIn As Double: spanZIn = Abs(maxZ - minZ) * M_TO_IN
+    Dim spanXIn As Double: spanXIn = Abs(maxx - minx) * M_TO_IN
+    Dim spanYIn As Double: spanYIn = Abs(maxy - miny) * M_TO_IN
+    Dim spanZIn As Double: spanZIn = Abs(maxz - minz) * M_TO_IN
 
     Dim minDim As Double: minDim = Min3(spanXIn, spanYIn, spanZIn)
     measuredThickness = minDim
     zAxisDelta = Abs(spanZIn - minDim)
     isZThin = (zAxisDelta <= ORIENTATION_AXIS_TOL_IN)
 
-    planeGapIn = Abs(minZ) * M_TO_IN
+    planeGapIn = Abs(minz) * M_TO_IN
 
     If pi.ThicknessIn > 0# Then
         thicknessDiff = Abs(minDim - pi.ThicknessIn)
@@ -1223,7 +1223,7 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     Dim sheetView As SldWorks.View: Set sheetView = dd.GetFirstView
     If sheetView Is Nothing Then Exit Sub
 
- codex/fix-orientation-of-assembly-part-2jfn26
+' codex/fix-orientation-of-assembly-part-2jfn26
     Dim v As SldWorks.View: Set v = sheetView.GetNextView
     Do While Not v Is Nothing
         Dim nextView As SldWorks.View
@@ -1248,7 +1248,7 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     Loop
 
     dd.ForceRebuild3 False
- main
+
     On Error GoTo 0
 End Sub
 
@@ -1620,5 +1620,6 @@ fail:
     On Error GoTo 0
     LogMessage "[WARN] Failed to write quantity report: " & reportPath & " (" & errMsg & ")", True
 End Sub
+
 
 
