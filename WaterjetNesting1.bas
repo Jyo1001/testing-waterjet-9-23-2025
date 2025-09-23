@@ -610,6 +610,7 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
     Dim bestFacePlanar As Double: bestFacePlanar = 1000000000#
     Dim bestFaceAxisComponent As Double: bestFaceAxisComponent = -2#
     Dim bestFaceFound As Boolean
+codex/fix-orientation-of-assembly-part-bsaaop
 
     Dim candidateMatrices As Collection
     Set candidateMatrices = BuildOrientationCandidateMatrices(baseRot, thinAxisIdx, hasLargestFace, largestFaceNormal)
@@ -622,6 +623,7 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
     For Each newR In candidateMatrices
 
 
+ main
         Dim candidateTransform As SldWorks.MathTransform
         Set candidateTransform = CreateTransformFromMatrix(baseData, newR, mathUtil)
         If candidateTransform Is Nothing Then GoTo nextRot
