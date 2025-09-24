@@ -1233,36 +1233,41 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
         currentName = v.Name
 
         If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
-            Dim deleted As Boolean
- codex/fix-deletion-of-unwanted-drawing-views-fg4b63
-            deleted = CallByName(dd, "DeleteView", VbMethod, currentName)
+codex/fix-deletion-of-unwanted-drawing-views-1i407m
+            Dim deleted As Boolean: deleted = False
 
-            If Not deleted Then
-                Dim md As SldWorks.ModelDoc2: Set md = dd
-
-                If Not v Is Nothing Then
-                    If v.Select2(False, 0) Then
-                        deleted = (md.DeleteSelection2(0) <> 0)
-                        CallByName md, "ClearSelection2", VbMethod, 0
+            ' First try the direct DeleteView API
+            If CallByName(dd, "DeleteView", VbMethod, currentName) Then
+                deleted = True
+            Else
+                ' Fallback #1: use the view object itself to drive the deletion
+                If Not deleted Then
+                    If CallByName(v, "Select2", VbMethod, False, Nothing) Then
+                        If CallByName(dd, "EditDelete", VbMethod) Then
+                            deleted = True
+                        Else
+                            CallByName(dd, "ClearSelection2", VbMethod, True)
+                        End If
                     End If
                 End If
 
+                ' Fallback #2: legacy SelectByID2 behaviour
                 If Not deleted Then
                     dd.ActivateView currentName
+                    Dim md As SldWorks.ModelDoc2: Set md = dd
                     If Not md.SelectByID2(currentName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0) Then
                         LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
-                    ElseIf md.DeleteSelection2(0) = 0 Then
+                    ElseIf CallByName(md, "DeleteSelection2", VbMethod, 0) = 0 Then
                         LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
                     Else
                         deleted = True
                     End If
- main
                 End If
-                md.ClearSelection2 True
             End If
 
             If Not deleted Then
-                LogMessage "[DXF] Unable to delete view " & currentName & " (unknown SolidWorks response)"
+                LogMessage "[DXF] Unable to delete view " & currentName & " after all attempts"
+ main
             End If
         End If
 
