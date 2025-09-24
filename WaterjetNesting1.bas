@@ -277,7 +277,6 @@ Private Sub CollectAssemblyParts(swAsm As SldWorks.AssemblyDoc, _
             If Len(pth) = 0 Then
                 LogMessage "Skip: virtual part failed to export " & c.Name2
                 GoTo cont
- 'codex/fix-orientation-of-assembly-part-2jfn26
             End If
         End If
 
@@ -403,7 +402,6 @@ Private Sub FixComponentInAssembly(comp As SldWorks.Component2, asm As SldWorks.
     End If
     On Error GoTo 0
 End Sub
-' codex/fix-orientation-of-assembly-part-2jfn26
 
 Private Function EnsureExternalPathForVirtual(md As SldWorks.ModelDoc2, _
                                               ByVal suggestFolder As String, _
@@ -483,7 +481,6 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             LogMessage "Skip placement: empty file path for " & pi.Config
             GoTo nextItem
         End If
- 'codex/fix-orientation-of-assembly-part-2jfn26
 
         Dim placements As Long: placements = 1
         If pi.Count > 1 Then
@@ -531,7 +528,7 @@ Private Sub OrientComponentForNesting(nestAsm As SldWorks.AssemblyDoc, _
 
     ' Keep the component in its default orientation (origin-to-origin) as dictated by the
     ' updated workflow. Previously we attempted to reorient each part so the thinnest axis
-    ' and largest face pointed “up”, but this produced inconsistent results. The DXF export
+    ' and largest face pointed "up", but this produced inconsistent results. The DXF export
     ' routine now evaluates standard drawing views and picks the largest projected area, so
     ' no rotation is applied here.
     FixComponentInAssembly comp, nestAsm
@@ -722,12 +719,10 @@ Private Function BuildAlignmentMatrixForVectors(srcX As Double, srcY As Double, 
         If pMag <= EPS Then
             px = -az: py = ax: pz = 0#
             pMag = Sqr(px * px + py * py + pz * pz)
- codex/fix-orientation-of-assembly-part-2jfn26
         End If
         If pMag <= EPS Then
             px = 1#: py = 0#: pz = 0#: pMag = 1#
         End If
-main
         px = px / pMag: py = py / pMag: pz = pz / pMag
 
         result(0, 0) = 2# * px * px - 1#
@@ -1222,10 +1217,14 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     On Error Resume Next
     Dim sheetView As SldWorks.View: Set sheetView = dd.GetFirstView
     If sheetView Is Nothing Then Exit Sub
+    Dim model As SldWorks.ModelDoc2
+    Set model = dd
+
 
 ' codex/fix-orientation-of-assembly-part-2jfn26
     Dim md As SldWorks.ModelDoc2
     Set md = dd
+
 
     Dim v As SldWorks.View: Set v = sheetView.GetNextView
     Do While Not v Is Nothing
@@ -1241,11 +1240,13 @@ codex/fix-deletion-of-unwanted-drawing-views-cmqoii
                 Dim selected As Boolean
                 selected = False
 
+
                 If Not v Is Nothing Then
                     selected = v.Select2(False, Nothing)
                 End If
 
                 If Not selected Then
+
                     Dim outline As Variant
                     outline = v.GetOutline
 
@@ -1258,15 +1259,18 @@ codex/fix-deletion-of-unwanted-drawing-views-cmqoii
                         End If
                     End If
 
+
                     selected = md.SelectByID2(currentName, "DRAWINGVIEW", cx, cy, 0, False, 0, Nothing, 0)
+
                 End If
 
                 If Not selected Then
                     LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
-                ElseIf md.DeleteSelection2(0) = 0 Then
+                ElseIf model.DeleteSelection2(0) = 0 Then
                     LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
  main
                 End If
+
 
                 ' Fallback #2: legacy SelectByID2 behaviour
                 If Not deleted Then
@@ -1285,6 +1289,7 @@ codex/fix-deletion-of-unwanted-drawing-views-cmqoii
             If Not deleted Then
                 LogMessage "[DXF] Unable to delete view " & currentName & " after all attempts"
  main
+
             End If
         End If
 
@@ -1581,8 +1586,6 @@ Public Function MakePlacementList(thkGroup As Collection) As Collection
         dimsOriginal(0) = Abs(pr.BBoxX)
         dimsOriginal(1) = Abs(pr.BBoxY)
         dimsOriginal(2) = Abs(pr.BBoxZ)
-
-'codex/fix-compile-error-at-thinaxisindex-5tl2al
         Dim thinIdx As Long: thinIdx = pr.ThinAxisIndex
         If thinIdx < 0 Or thinIdx > 2 Then
             thinIdx = IndexOfMin3(dimsOriginal(0), dimsOriginal(1), dimsOriginal(2))
@@ -1655,8 +1658,6 @@ Private Sub WriteQuantityReportForGroup(thkGroup As Collection, reportPath As St
     LogMessage "[TXT] Wrote quantity report -> " & reportPath
     On Error GoTo 0
     Exit Sub
-
-' codex/fix-compile-error-at-thinaxisindex-5tl2al
 fail:
     Dim errMsg As String: errMsg = Err.Description
     On Error Resume Next

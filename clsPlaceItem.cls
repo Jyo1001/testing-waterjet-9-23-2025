@@ -6,7 +6,6 @@ Public Count As Long
 Public WidthIn As Double
 Public HeightIn As Double
 Public ThicknessIn As Double
-'codex/fix-compile-error-at-thinaxisindex-5tl2al
 Public thinAxis As Long
 
 Private Sub Class_Initialize()
