@@ -13,7 +13,6 @@ Private Sub Class_Initialize()
     ThinAxisIndex = -1
 End Sub
 
-' codex/fix-compile-error-at-thinaxisindex-5tl2al
 Public Property Get thinAxis() As Long
     thinAxis = ThinAxisIndex
 End Property
