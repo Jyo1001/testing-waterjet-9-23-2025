@@ -1215,91 +1215,118 @@ End Sub
 ' Delete all model views except one
 Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     On Error Resume Next
+
+    Dim drw As SldWorks.ModelDoc2: Set drw = dd
+    Dim sh As SldWorks.Sheet: Set sh = dd.GetCurrentSheet
+    If Not sh Is Nothing Then CallByName dd, "ActivateSheet", VbMethod, sh.GetName
+    If Not drw Is Nothing Then drw.ForceRebuild3 False
+    DoEvents
+
+    ' If blank keepName, default to the first model view
+    If Len(keepName) = 0 Then
+        Dim t As SldWorks.View: Set t = dd.GetFirstView
+        If Not t Is Nothing Then Set t = t.GetNextView
+        If Not t Is Nothing Then keepName = t.Name
+    End If
+
+    ' Collect targets first so enumeration isn't invalidated while deleting
+    Dim toDelete() As String, n As Long: n = 0
     Dim sheetView As SldWorks.View: Set sheetView = dd.GetFirstView
-    If sheetView Is Nothing Then Exit Sub
-    Dim model As SldWorks.ModelDoc2
-    Set model = dd
-
-
-' codex/fix-orientation-of-assembly-part-2jfn26
-    Dim md As SldWorks.ModelDoc2
-    Set md = dd
-
-
     Dim v As SldWorks.View: Set v = sheetView.GetNextView
     Do While Not v Is Nothing
-        Dim nextView As SldWorks.View
-        Set nextView = v.GetNextView
+        If StrComp(v.Name, keepName, vbTextCompare) <> 0 Then
+            ReDim Preserve toDelete(n)
+            toDelete(n) = v.Name
+            n = n + 1
+        End If
+        Set v = v.GetNextView
+    Loop
+    If n = 0 Then Exit Sub
 
-        Dim currentName As String
-        currentName = v.Name
+    Dim i As Long, nm As String, ok As Boolean, selOk As Boolean
+    For i = LBound(toDelete) To UBound(toDelete)
+        nm = toDelete(i): ok = False: selOk = False
 
-        If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
-codex/fix-deletion-of-unwanted-drawing-views-cmqoii
-            If Not CallByName(dd, "DeleteView", VbMethod, currentName) Then
-                Dim selected As Boolean
-                selected = False
+        ' A) Try direct object delete
+        Set v = FindViewByName(dd, nm)
+        If Not v Is Nothing Then
+            ok = CallByName(v, "Delete2", VbMethod)
+            If Not ok Then ok = CallByName(v, "Delete", VbMethod)
+        End If
+        If Not ok Then ok = Not ExistsViewName(dd, nm)
 
+        ' B) Fallback: API delete by name
+        If Not ok Then
+            ok = CallByName(dd, "DeleteView", VbMethod, nm)
+            If Not ok Then ok = Not ExistsViewName(dd, nm)
+        End If
 
-                If Not v Is Nothing Then
-                    selected = v.Select2(False, Nothing)
-                End If
+        ' C) Last resort: Activate ? SelectByID2 ? EditDelete (recorder-style)
+        If Not ok And ExistsViewName(dd, nm) Then
+            CallByName dd, "ActivateView", VbMethod, nm
+            If Not drw Is Nothing Then drw.ClearSelection2 True
+            DoEvents
 
-                If Not selected Then
-
-                    Dim outline As Variant
-                    outline = v.GetOutline
-
-                    Dim cx As Double: cx = 0#
-                    Dim cy As Double: cy = 0#
-                    If IsArray(outline) Then
-                        If UBound(outline) >= 3 Then
-                            cx = (outline(0) + outline(2)) / 2#
-                            cy = (outline(1) + outline(3)) / 2#
+            ' Try simple name select
+            If Not drw Is Nothing Then
+                selOk = drw.Extension.SelectByID2(nm, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0)
+                ' If that fails, click at center of view's outline
+                If Not selOk Then
+                    Set v = FindViewByName(dd, nm)
+                    If Not v Is Nothing Then
+                        Dim o As Variant: o = v.GetOutline
+                        If IsArray(o) And UBound(o) >= 3 Then
+                            Dim cx As Double, cy As Double
+                            cx = (CDbl(o(0)) + CDbl(o(2))) / 2#
+                            cy = (CDbl(o(1)) + CDbl(o(3))) / 2#
+                            selOk = drw.Extension.SelectByID2(nm, "DRAWINGVIEW", cx, cy, 0, False, 0, Nothing, 0)
                         End If
                     End If
-
-
-                    selected = md.SelectByID2(currentName, "DRAWINGVIEW", cx, cy, 0, False, 0, Nothing, 0)
-
                 End If
 
-                If Not selected Then
-                    LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
-                ElseIf model.DeleteSelection2(0) = 0 Then
-                    LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
- main
+                If selOk Then
+                    ' IMPORTANT: EditDelete is a Sub in some SW versions ? do NOT assign its return
+                    CallByName drw, "EditDelete", VbMethod
+                    drw.ClearSelection2 True
+                    DoEvents
+                    ok = Not ExistsViewName(dd, nm)
                 End If
-
-
-                ' Fallback #2: legacy SelectByID2 behaviour
-                If Not deleted Then
-                    dd.ActivateView currentName
-                    Dim md As SldWorks.ModelDoc2: Set md = dd
-                    If Not md.SelectByID2(currentName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0) Then
-                        LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
-                    ElseIf CallByName(md, "DeleteSelection2", VbMethod, 0) = 0 Then
-                        LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
-                    Else
-                        deleted = True
-                    End If
-                End If
-            End If
-
-            If Not deleted Then
-                LogMessage "[DXF] Unable to delete view " & currentName & " after all attempts"
- main
-
             End If
         End If
 
-        Set v = nextView
-    Loop
+        LogMessage "[DXF] Delete '" & nm & "' -> " & IIf(ok, "OK", "FAILED")
+    Next i
 
-    dd.ForceRebuild3 False
-
+    If Not drw Is Nothing Then drw.ForceRebuild3 False
+    DoEvents
     On Error GoTo 0
 End Sub
+
+Private Function FindViewByName(dd As SldWorks.DrawingDoc, viewName As String) As SldWorks.View
+    On Error Resume Next
+
+    If dd Is Nothing Then Exit Function
+    If Len(viewName) = 0 Then Exit Function
+
+    Dim v As SldWorks.View
+    Set v = dd.GetFirstView
+    Do While Not v Is Nothing
+        If StrComp(v.Name, viewName, vbTextCompare) = 0 Then
+            Set FindViewByName = v
+            GoTo done
+        End If
+        Set v = v.GetNextView
+    Loop
+
+done:
+    On Error GoTo 0
+End Function
+
+Private Function ExistsViewName(dd As SldWorks.DrawingDoc, viewName As String) As Boolean
+    On Error Resume Next
+    ExistsViewName = Not FindViewByName(dd, viewName) Is Nothing
+    On Error GoTo 0
+End Function
 
 ' Create a named standard view (Top/Front/Right) with 1:1 scale
 Private Function CreateStandardDrawingView(dd As SldWorks.DrawingDoc, _
