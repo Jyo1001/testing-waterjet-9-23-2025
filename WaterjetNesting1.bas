@@ -1215,16 +1215,19 @@ End Sub
 ' Delete all model views except one
 Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     On Error Resume Next
+
     Dim sheetView As SldWorks.View: Set sheetView = dd.GetFirstView
     If sheetView Is Nothing Then Exit Sub
+
+    Dim sheetName As String
+    sheetName = ""
+    sheetName = CallByName(sheetView, "GetName2", VbMethod)
+    If Len(sheetName) > 0 Then CallByName(dd, "ActivateSheet", VbMethod, sheetName)
+
     Dim model As SldWorks.ModelDoc2
     Set model = dd
-
-
-' codex/fix-orientation-of-assembly-part-2jfn26
-    Dim md As SldWorks.ModelDoc2
-    Set md = dd
-
+    Dim ext As SldWorks.ModelDocExtension
+    If Not model Is Nothing Then Set ext = model.Extension
 
     Dim v As SldWorks.View: Set v = sheetView.GetNextView
     Do While Not v Is Nothing
@@ -1235,61 +1238,49 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
         currentName = v.Name
 
         If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
-codex/fix-deletion-of-unwanted-drawing-views-cmqoii
+            ' Try direct delete by name first
             If Not CallByName(dd, "DeleteView", VbMethod, currentName) Then
-                Dim selected As Boolean
-                selected = False
+                Dim selected As Boolean: selected = False
 
+                If Not model Is Nothing Then model.ClearSelection2 True
 
-                If Not v Is Nothing Then
-                    selected = v.Select2(False, Nothing)
+                ' Try selecting the view object
+                If Not v Is Nothing Then selected = v.Select2(False, 0)
+
+                ' Fallback: try selecting through the Entity interface
+                If Not selected Then
+                    Dim ent As SldWorks.Entity
+                    Set ent = v
+                    If Not ent Is Nothing Then selected = ent.Select4(False, Nothing, False)
                 End If
 
-                If Not selected Then
+                Dim cx As Double: cx = 0#
+                Dim cy As Double: cy = 0#
 
-                    Dim outline As Variant
-                    outline = v.GetOutline
-
-                    Dim cx As Double: cx = 0#
-                    Dim cy As Double: cy = 0#
+                ' Fallback: select by name at the view's center
+                If Not selected And Not model Is Nothing Then
+                    Dim outline As Variant: outline = v.GetOutline
                     If IsArray(outline) Then
                         If UBound(outline) >= 3 Then
                             cx = (outline(0) + outline(2)) / 2#
                             cy = (outline(1) + outline(3)) / 2#
                         End If
                     End If
+                    selected = model.SelectByID2(currentName, "DRAWINGVIEW", cx, cy, 0, False, 0, Nothing, 0)
+                End If
 
-
-                    selected = md.SelectByID2(currentName, "DRAWINGVIEW", cx, cy, 0, False, 0, Nothing, 0)
-
+                ' Final fallback: use ModelDocExtension.SelectByID2 if available
+                If Not selected And Not ext Is Nothing Then
+                    selected = ext.SelectByID2(currentName, "DRAWINGVIEW", cx, cy, 0#, False, 0, Nothing, 0)
                 End If
 
                 If Not selected Then
                     LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
-                ElseIf model.DeleteSelection2(0) = 0 Then
+                ElseIf CallByName(model, "DeleteSelection2", VbMethod, 0) = 0 Then
                     LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
- main
                 End If
 
-
-                ' Fallback #2: legacy SelectByID2 behaviour
-                If Not deleted Then
-                    dd.ActivateView currentName
-                    Dim md As SldWorks.ModelDoc2: Set md = dd
-                    If Not md.SelectByID2(currentName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0) Then
-                        LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
-                    ElseIf CallByName(md, "DeleteSelection2", VbMethod, 0) = 0 Then
-                        LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
-                    Else
-                        deleted = True
-                    End If
-                End If
-            End If
-
-            If Not deleted Then
-                LogMessage "[DXF] Unable to delete view " & currentName & " after all attempts"
- main
-
+                If Not model Is Nothing Then model.ClearSelection2 True
             End If
         End If
 
@@ -1297,7 +1288,6 @@ codex/fix-deletion-of-unwanted-drawing-views-cmqoii
     Loop
 
     dd.ForceRebuild3 False
-
     On Error GoTo 0
 End Sub
 
