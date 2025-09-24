@@ -1236,6 +1236,7 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
         currentName = v.Name
 
         If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
+codex/fix-deletion-of-unwanted-drawing-views-cmqoii
             If Not CallByName(dd, "DeleteView", VbMethod, currentName) Then
                 Dim selected As Boolean
                 selected = False
@@ -1264,7 +1265,26 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
                     LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
                 ElseIf md.DeleteSelection2(0) = 0 Then
                     LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
+ main
                 End If
+
+                ' Fallback #2: legacy SelectByID2 behaviour
+                If Not deleted Then
+                    dd.ActivateView currentName
+                    Dim md As SldWorks.ModelDoc2: Set md = dd
+                    If Not md.SelectByID2(currentName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0) Then
+                        LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
+                    ElseIf CallByName(md, "DeleteSelection2", VbMethod, 0) = 0 Then
+                        LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
+                    Else
+                        deleted = True
+                    End If
+                End If
+            End If
+
+            If Not deleted Then
+                LogMessage "[DXF] Unable to delete view " & currentName & " after all attempts"
+ main
             End If
         End If
 
