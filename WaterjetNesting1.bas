@@ -1234,6 +1234,7 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
 
         If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
             Dim deleted As Boolean
+ codex/fix-deletion-of-unwanted-drawing-views-fg4b63
             deleted = CallByName(dd, "DeleteView", VbMethod, currentName)
 
             If Not deleted Then
@@ -1255,7 +1256,13 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
                     Else
                         deleted = True
                     End If
+ main
                 End If
+                md.ClearSelection2 True
+            End If
+
+            If Not deleted Then
+                LogMessage "[DXF] Unable to delete view " & currentName & " (unknown SolidWorks response)"
             End If
         End If
 
