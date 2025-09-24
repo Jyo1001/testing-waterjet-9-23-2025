@@ -1212,7 +1212,9 @@ Private Sub ApplySheetFormat(dd As SldWorks.DrawingDoc, fmtPath As String)
     On Error GoTo 0
 End Sub
 
-' Delete all model views except one
+
+
+' === replace your DeleteAllViewsExcept with this ===
 Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     On Error Resume Next
 
@@ -1302,31 +1304,27 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     On Error GoTo 0
 End Sub
 
-Private Function FindViewByName(dd As SldWorks.DrawingDoc, viewName As String) As SldWorks.View
+' === helpers ===
+Private Function FindViewByName(dd As SldWorks.DrawingDoc, ByVal nm As String) As SldWorks.View
     On Error Resume Next
-
-    If dd Is Nothing Then Exit Function
-    If Len(viewName) = 0 Then Exit Function
-
-    Dim v As SldWorks.View
-    Set v = dd.GetFirstView
+    Dim v As SldWorks.View: Set v = dd.GetFirstView
+    If Not v Is Nothing Then Set v = v.GetNextView
     Do While Not v Is Nothing
-        If StrComp(v.Name, viewName, vbTextCompare) = 0 Then
+        If StrComp(v.Name, nm, vbTextCompare) = 0 Then
             Set FindViewByName = v
-            GoTo done
+            Exit Function
         End If
         Set v = v.GetNextView
     Loop
-
-done:
     On Error GoTo 0
 End Function
 
-Private Function ExistsViewName(dd As SldWorks.DrawingDoc, viewName As String) As Boolean
+Private Function ExistsViewName(dd As SldWorks.DrawingDoc, ByVal nm As String) As Boolean
     On Error Resume Next
-    ExistsViewName = Not FindViewByName(dd, viewName) Is Nothing
+    ExistsViewName = Not (FindViewByName(dd, nm) Is Nothing)
     On Error GoTo 0
 End Function
+
 
 ' Create a named standard view (Top/Front/Right) with 1:1 scale
 Private Function CreateStandardDrawingView(dd As SldWorks.DrawingDoc, _
@@ -1692,6 +1690,7 @@ fail:
     On Error GoTo 0
     LogMessage "[WARN] Failed to write quantity report: " & reportPath & " (" & errMsg & ")", True
 End Sub
+
 
 
 
