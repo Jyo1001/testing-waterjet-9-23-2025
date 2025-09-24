@@ -143,72 +143,89 @@ Sub Waterjet_Nesting_Workflow()
     Dim k As Variant
     For Each k In groups.Keys
         Dim thkIn As Double: thkIn = CDbl(k) / 1000#
-        Dim niceName As String: niceName = Format(thkIn, "0.###") & " in thick sheet"
-        LogMessage "Processing group: " & niceName
-
-        ' Build items list
-        g_LastStep = "[GROUP] MakePlacementList"
-        Dim items As Collection: Set items = MakePlacementList(groups(k))
-        If items.Count = 0 Then
-            LogMessage "No placeable items in group " & niceName
-            GoTo NextGroup
+        Dim groupParts As Collection: Set groupParts = groups(k)
+        If groupParts.Count = 0 Then
+            LogMessage "No placeable items in thickness group " & Format(thkIn, "0.###") & " in"
+            GoTo NextThickness
         End If
 
-        ' Create nesting assembly
-        g_LastStep = "[NEWDOC] NewDocument"
-        Dim nestAsmModel As SldWorks.ModelDoc2
-        Set nestAsmModel = swApp.NewDocument(asmTpl, 0, 0, 0)
-        If nestAsmModel Is Nothing Then
-            LogMessage "Failed to create assembly for " & niceName, True
-            GoTo NextGroup
-        End If
-        If nestAsmModel.GetType <> swDocASSEMBLY Then
-            LogMessage "Template mismatch: assembly template is not .asmdot", True
-            nestAsmModel.Quit: GoTo NextGroup
-        End If
-        Dim nestAsm As SldWorks.AssemblyDoc: Set nestAsm = nestAsmModel
+        Dim partIdx As Long
+        For partIdx = 1 To groupParts.Count
+            Dim prSingle As clsPartRecord
+            Set prSingle = groupParts(partIdx)
 
-        ' ---- Force IPS units on the new assembly
-        ForceUnitsIPS nestAsmModel
+            Dim niceName As String: niceName = BuildOutputBaseName(thkIn, prSingle)
+            LogMessage "Processing part: " & niceName
 
-        ' Save unique (silent)
-        g_LastStep = "[SAVE] SaveAs4"
-        Dim baseAsmPath As String: baseAsmPath = outFolder & "\" & SanitizeFileName(niceName) & ".SLDASM"
-        Dim targetAsmPath As String: targetAsmPath = UniqueTargetPath(baseAsmPath)
-        Dim e As Long, w As Long
-        nestAsmModel.SaveAs4 targetAsmPath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, e, w
-        LogMessage "[SAVE] SaveAs4 err=" & e & " warn=" & w & " -> " & targetAsmPath
-        If e <> 0 Then
-            LogMessage "[ERROR] Aborting group due to SaveAs4 failure for " & niceName, True
-            nestAsmModel.Quit
-            GoTo NextGroup
-        End If
+            ' Build items list for this single part
+            g_LastStep = "[GROUP] MakePlacementList"
+            Dim singleGroup As New Collection
+            singleGroup.Add prSingle
+            Dim items As Collection: Set items = MakePlacementList(singleGroup)
+            If items.Count = 0 Then
+                LogMessage "No placeable items for part " & prSingle.DisplayName
+                GoTo NextPart
+            End If
 
-        ' Emit quantity report alongside assembly/DXF outputs
-        Dim qtyReportPath As String
-        qtyReportPath = Replace$(targetAsmPath, ".SLDASM", ".txt")
-        WriteQuantityReportForGroup groups(k), qtyReportPath
+            ' Create nesting assembly
+            g_LastStep = "[NEWDOC] NewDocument"
+            Dim nestAsmModel As SldWorks.ModelDoc2
+            Set nestAsmModel = swApp.NewDocument(asmTpl, 0, 0, 0)
+            If nestAsmModel Is Nothing Then
+                LogMessage "Failed to create assembly for " & niceName, True
+                GoTo NextPart
+            End If
+            If nestAsmModel.GetType <> swDocASSEMBLY Then
+                LogMessage "Template mismatch: assembly template is not .asmdot", True
+                nestAsmModel.Quit: GoTo NextPart
+            End If
+            Dim nestAsm As SldWorks.AssemblyDoc: Set nestAsm = nestAsmModel
 
-        ' Place parts (coordinate-based, explicit config)
-        g_LastStep = "[PLACE] begin"
-        PlaceItemsGrid nestAsm, items, g_GapIn
+            ' ---- Force IPS units on the new assembly
+            ForceUnitsIPS nestAsmModel
 
-        ' Save after placement
-        g_LastStep = "[SAVE] post-place"
-        Dim errCode As Long: nestAsmModel.Save3 swSaveAsOptions_Silent, errCode, 0
-        LogMessage "[SAVE] Save3 after placement err=" & errCode
-        If errCode <> 0 Then
-            LogMessage "[ERROR] Aborting DXF export due to Save3 failure for " & niceName, True
-            nestAsmModel.Quit
-            GoTo NextGroup
-        End If
+            ' Save unique (silent)
+            g_LastStep = "[SAVE] SaveAs4"
+            Dim baseAsmPath As String
+            baseAsmPath = outFolder & "\" & SanitizeFileName(niceName) & ".SLDASM"
+            Dim targetAsmPath As String: targetAsmPath = UniqueTargetPath(baseAsmPath)
+            Dim e As Long, w As Long
+            nestAsmModel.SaveAs4 targetAsmPath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, e, w
+            LogMessage "[SAVE] SaveAs4 err=" & e & " warn=" & w & " -> " & targetAsmPath
+            If e <> 0 Then
+                LogMessage "[ERROR] Aborting output due to SaveAs4 failure for " & niceName, True
+                nestAsmModel.Quit
+                GoTo NextPart
+            End If
 
-        ' Export top-view-only DXF at 1:1
-        g_LastStep = "[DXF] export"
-        Dim dxfPath As String: dxfPath = Replace$(targetAsmPath, ".SLDASM", ".DXF")
-        ExportAssemblyTopDXF swApp, drwTplDefault, targetAsmPath, dxfPath
+            ' Emit quantity report alongside assembly/DXF outputs
+            Dim qtyReportPath As String
+            qtyReportPath = Replace$(targetAsmPath, ".SLDASM", ".txt")
+            WriteQuantityReportForPart prSingle, thkIn, qtyReportPath
 
-NextGroup:
+            ' Place parts (coordinate-based, explicit config)
+            g_LastStep = "[PLACE] begin"
+            PlaceItemsGrid nestAsm, items, g_GapIn
+
+            ' Save after placement
+            g_LastStep = "[SAVE] post-place"
+            Dim errCode As Long: nestAsmModel.Save3 swSaveAsOptions_Silent, errCode, 0
+            LogMessage "[SAVE] Save3 after placement err=" & errCode
+            If errCode <> 0 Then
+                LogMessage "[ERROR] Aborting DXF export due to Save3 failure for " & niceName, True
+                nestAsmModel.Quit
+                GoTo NextPart
+            End If
+
+            ' Export top-view-only DXF at 1:1
+            g_LastStep = "[DXF] export"
+            Dim dxfPath As String: dxfPath = Replace$(targetAsmPath, ".SLDASM", ".DXF")
+            ExportAssemblyTopDXF swApp, drwTplDefault, targetAsmPath, dxfPath
+
+NextPart:
+        Next partIdx
+
+NextThickness:
     Next
 
     LogMessage "Waterjet nesting complete. Output: " & outFolder, True
@@ -1587,6 +1604,37 @@ Public Function BuildDisplayText(pr As clsPartRecord) As String
     BuildDisplayText = GetFileName(pr.FullPath) & " (" & pr.Config & ")  [" & ShortFolder(pr.FullPath) & "]"
 End Function
 
+Private Function FormatThicknessLabel(thkIn As Double) As String
+    Dim label As String
+    label = Trim$(Format(thkIn, "0.###"))
+    If Len(label) = 0 Then label = "0"
+    FormatThicknessLabel = label & "in"
+End Function
+
+Private Function GetFileStem(ByVal p As String) As String
+    Dim nameOnly As String: nameOnly = GetFileName(p)
+    Dim dotPos As Long: dotPos = InStrRev(nameOnly, ".")
+    If dotPos > 1 Then
+        GetFileStem = Left$(nameOnly, dotPos - 1)
+    Else
+        GetFileStem = nameOnly
+    End If
+End Function
+
+Public Function BuildOutputBaseName(thkIn As Double, pr As clsPartRecord) As String
+    Dim partStem As String: partStem = GetFileStem(pr.FullPath)
+    If Len(partStem) = 0 Then partStem = "Part"
+
+    Dim qtyLabel As String
+    If pr.Qty > 0 Then
+        qtyLabel = CStr(pr.Qty)
+    Else
+        qtyLabel = "1"
+    End If
+
+    BuildOutputBaseName = FormatThicknessLabel(thkIn) & "-" & partStem & "-" & qtyLabel
+End Function
+
 Private Sub DumpAllPartsForUI()
     Dim i As Long
     For i = 1 To g_AllParts.Count
@@ -1665,19 +1713,24 @@ Public Function MakePlacementList(thkGroup As Collection) As Collection
     Set MakePlacementList = L
 End Function
 
-Private Sub WriteQuantityReportForGroup(thkGroup As Collection, reportPath As String)
+Private Sub WriteQuantityReportForPart(pr As clsPartRecord, _
+                                       thkIn As Double, _
+                                       reportPath As String)
     On Error GoTo fail
 
     Dim fnum As Integer
     fnum = FreeFile
     Open reportPath For Output As #fnum
-    Print #fnum, "Part,Configuration,Quantity"
+    Print #fnum, "SheetThickness,Part,Configuration,Quantity"
 
-    Dim i As Long
-    For i = 1 To thkGroup.Count
-        Dim pr As clsPartRecord: Set pr = thkGroup(i)
-        Print #fnum, GetFileName(pr.FullPath) & "," & pr.Config & "," & CStr(pr.Qty)
-    Next i
+    Dim qtyOut As Long
+    If pr.Qty > 0 Then
+        qtyOut = pr.Qty
+    Else
+        qtyOut = 1
+    End If
+
+    Print #fnum, FormatThicknessLabel(thkIn) & "," & GetFileName(pr.FullPath) & "," & pr.Config & "," & CStr(qtyOut)
 
     Close #fnum
     LogMessage "[TXT] Wrote quantity report -> " & reportPath
