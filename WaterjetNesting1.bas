@@ -1233,6 +1233,7 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
         currentName = v.Name
 
         If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
+codex/fix-deletion-of-unwanted-drawing-views-1i407m
             Dim deleted As Boolean: deleted = False
 
             ' First try the direct DeleteView API
@@ -1266,6 +1267,7 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
 
             If Not deleted Then
                 LogMessage "[DXF] Unable to delete view " & currentName & " after all attempts"
+ main
             End If
         End If
 
