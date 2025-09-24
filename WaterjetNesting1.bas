@@ -1224,6 +1224,9 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     If sheetView Is Nothing Then Exit Sub
 
 ' codex/fix-orientation-of-assembly-part-2jfn26
+    Dim md As SldWorks.ModelDoc2
+    Set md = dd
+
     Dim v As SldWorks.View: Set v = sheetView.GetNextView
     Do While Not v Is Nothing
         Dim nextView As SldWorks.View
@@ -1234,9 +1237,30 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
 
         If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
             If Not CallByName(dd, "DeleteView", VbMethod, currentName) Then
-                dd.ActivateView currentName
-                Dim md As SldWorks.ModelDoc2: Set md = dd
-                If Not md.SelectByID2(currentName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0) Then
+                Dim selected As Boolean
+                selected = False
+
+                If Not v Is Nothing Then
+                    selected = v.Select2(False, Nothing)
+                End If
+
+                If Not selected Then
+                    Dim outline As Variant
+                    outline = v.GetOutline
+
+                    Dim cx As Double: cx = 0#
+                    Dim cy As Double: cy = 0#
+                    If IsArray(outline) Then
+                        If UBound(outline) >= 3 Then
+                            cx = (outline(0) + outline(2)) / 2#
+                            cy = (outline(1) + outline(3)) / 2#
+                        End If
+                    End If
+
+                    selected = md.SelectByID2(currentName, "DRAWINGVIEW", cx, cy, 0, False, 0, Nothing, 0)
+                End If
+
+                If Not selected Then
                     LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
                 ElseIf md.DeleteSelection2(0) = 0 Then
                     LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
