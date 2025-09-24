@@ -1220,6 +1220,12 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
     Dim model As SldWorks.ModelDoc2
     Set model = dd
 
+
+' codex/fix-orientation-of-assembly-part-2jfn26
+    Dim md As SldWorks.ModelDoc2
+    Set md = dd
+
+
     Dim v As SldWorks.View: Set v = sheetView.GetNextView
     Do While Not v Is Nothing
         Dim nextView As SldWorks.View
@@ -1229,19 +1235,18 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
         currentName = v.Name
 
         If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
+codex/fix-deletion-of-unwanted-drawing-views-cmqoii
             If Not CallByName(dd, "DeleteView", VbMethod, currentName) Then
                 Dim selected As Boolean
                 selected = False
 
-                If Not model Is Nothing Then
-                    model.ClearSelection2 True
-                End If
 
                 If Not v Is Nothing Then
-                    selected = v.Select2(False, 0)
+                    selected = v.Select2(False, Nothing)
                 End If
 
-                If Not selected And Not model Is Nothing Then
+                If Not selected Then
+
                     Dim outline As Variant
                     outline = v.GetOutline
 
@@ -1254,18 +1259,37 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
                         End If
                     End If
 
-                    selected = model.SelectByID2(currentName, "DRAWINGVIEW", cx, cy, 0, False, 0, Nothing, 0)
+
+                    selected = md.SelectByID2(currentName, "DRAWINGVIEW", cx, cy, 0, False, 0, Nothing, 0)
+
                 End If
 
                 If Not selected Then
                     LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
                 ElseIf model.DeleteSelection2(0) = 0 Then
                     LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
+ main
                 End If
 
-                If Not model Is Nothing Then
-                    model.ClearSelection2 True
+
+                ' Fallback #2: legacy SelectByID2 behaviour
+                If Not deleted Then
+                    dd.ActivateView currentName
+                    Dim md As SldWorks.ModelDoc2: Set md = dd
+                    If Not md.SelectByID2(currentName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0) Then
+                        LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
+                    ElseIf CallByName(md, "DeleteSelection2", VbMethod, 0) = 0 Then
+                        LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
+                    Else
+                        deleted = True
+                    End If
                 End If
+            End If
+
+            If Not deleted Then
+                LogMessage "[DXF] Unable to delete view " & currentName & " after all attempts"
+ main
+
             End If
         End If
 
