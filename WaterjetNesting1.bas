@@ -1233,14 +1233,40 @@ Private Sub DeleteAllViewsExcept(dd As SldWorks.DrawingDoc, keepName As String)
         currentName = v.Name
 
         If StrComp(currentName, keepName, vbTextCompare) <> 0 Then
-            If Not CallByName(dd, "DeleteView", VbMethod, currentName) Then
+            Dim deleted As Boolean
+
+            Err.Clear
+            deleted = False
+            deleted = v.Delete
+            If Err.Number <> 0 Then
+                Err.Clear
+                deleted = False
+            End If
+
+            If Not deleted Then
+                Err.Clear
+                deleted = CallByName(dd, "DeleteView", VbMethod, currentName)
+                If Err.Number <> 0 Then
+                    Err.Clear
+                    deleted = False
+                End If
+            End If
+
+            If Not deleted Then
                 dd.ActivateView currentName
                 Dim md As SldWorks.ModelDoc2: Set md = dd
                 If Not md.SelectByID2(currentName, "DRAWINGVIEW", 0, 0, 0, False, 0, Nothing, 0) Then
                     LogMessage "[DXF] Failed to select view " & currentName & " for deletion"
                 ElseIf md.DeleteSelection2(0) = 0 Then
-                    LogMessage "[DXF] DeleteSelection2 failed for view " & currentName
+                    LogMessage "[DXF] DeleteSelection2 failed for view " & currentName"
+                Else
+                    deleted = True
                 End If
+                md.ClearSelection2 True
+            End If
+
+            If Not deleted Then
+                LogMessage "[DXF] Unable to delete view " & currentName & " (unknown SolidWorks response)"
             End If
         End If
 
