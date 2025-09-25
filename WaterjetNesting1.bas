@@ -220,8 +220,7 @@ Sub Waterjet_Nesting_Workflow()
                 GoTo NextPart
             End If
 
- main
-            ' Export top-view-only DXF at 1:1
+     ' Export top-view-only DXF at 1:1
             g_LastStep = "[DXF] export"
             Dim dxfPath As String: dxfPath = Replace$(targetAsmPath, ".SLDASM", ".DXF")
             ExportAssemblyTopDXF swApp, drwTplDefault, targetAsmPath, dxfPath
@@ -1775,7 +1774,7 @@ Private Sub WriteQuantityReportForPart(pr As clsPartRecord, _
     End If
 
     Print #fnum, FormatThicknessLabel(thkIn) & "," & GetFileName(pr.FullPath) & "," & pr.Config & "," & CStr(qtyOut)
- main
+ 
 
     Close #fnum
     LogMessage "[TXT] Wrote quantity report -> " & reportPath
@@ -1794,6 +1793,7 @@ Private Function CsvCell(value As String) As String
     sanitized = Replace$(value, """", """""")
     CsvCell = """" & sanitized & """"
 End Function
+
 
 
 
