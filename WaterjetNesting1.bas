@@ -180,13 +180,9 @@ Sub Waterjet_Nesting_Workflow()
             End If
             If nestAsmModel.GetType <> swDocASSEMBLY Then
                 LogMessage "Template mismatch: assembly template is not .asmdot", True
-                CloseModelDoc swApp, nestAsmModel, niceName
-                Set nestAsm = Nothing
-                On Error Resume Next
-                swApp.ActivateDoc3 swModel.GetTitle, False, 0
-                On Error GoTo 0
-                GoTo NextPart
-            End If
+
+                nestAsmModel.Quit: GoTo NextPart
+             End If
             Dim nestAsm As SldWorks.AssemblyDoc: Set nestAsm = nestAsmModel
 
             ' ---- Force IPS units on the new assembly
@@ -202,11 +198,8 @@ Sub Waterjet_Nesting_Workflow()
             LogMessage "[SAVE] SaveAs4 err=" & e & " warn=" & w & " -> " & targetAsmPath
             If e <> 0 Then
                 LogMessage "[ERROR] Aborting output due to SaveAs4 failure for " & niceName, True
-                CloseModelDoc swApp, nestAsmModel, niceName
-                Set nestAsm = Nothing
-                On Error Resume Next
-                swApp.ActivateDoc3 swModel.GetTitle, False, 0
-                On Error GoTo 0
+                nestAsmModel.Quit
+
                 GoTo NextPart
             End If
 
@@ -221,46 +214,23 @@ Sub Waterjet_Nesting_Workflow()
 
             ' Save after placement
             g_LastStep = "[SAVE] post-place"
-            Dim errCode As Long
-            Dim warnCode As Long
-            errCode = 0
-            warnCode = 0
-            nestAsmModel.Save3 swSaveAsOptions_Silent, errCode, warnCode
-            LogMessage "[SAVE] Save3 after placement err=" & errCode & " warn=" & warnCode
+
+            Dim errCode As Long: nestAsmModel.Save3 swSaveAsOptions_Silent, errCode, 0
+            LogMessage "[SAVE] Save3 after placement err=" & errCode
             If errCode <> 0 Then
                 LogMessage "[ERROR] Aborting DXF export due to Save3 failure for " & niceName, True
-                CloseModelDoc swApp, nestAsmModel, niceName
-                Set nestAsm = Nothing
-                On Error Resume Next
-                swApp.ActivateDoc3 swModel.GetTitle, False, 0
-                On Error GoTo 0
+                nestAsmModel.Quit
                 GoTo NextPart
             End If
 
-            ' Export top-view-only DXF at 1:1
+     ' Export top-view-only DXF at 1:1
             g_LastStep = "[DXF] export"
             Dim dxfPath As String: dxfPath = Replace$(targetAsmPath, ".SLDASM", ".DXF")
             ExportAssemblyTopDXF swApp, drwTplDefault, targetAsmPath, dxfPath
 
-            ' Force one last silent save to capture any drawing-driven updates, then close the doc
-            g_LastStep = "[SAVE] final"
-            errCode = 0
-            warnCode = 0
-            nestAsmModel.Save3 swSaveAsOptions_Silent, errCode, warnCode
-            LogMessage "[SAVE] final Save3 err=" & errCode & " warn=" & warnCode
-
-            g_LastStep = "[CLOSE] assembly"
-            CloseModelDoc swApp, nestAsmModel, niceName
-            Set nestAsmModel = Nothing
-            Set nestAsm = Nothing
-
-            ' Reactivate the original assembly so subsequent iterations attach to the right context
-            On Error Resume Next
-            swApp.ActivateDoc3 swModel.GetTitle, False, 0
-            On Error GoTo 0
-
 NextPart:
         Next partIdx
+
 
 NextThickness:
     Next
@@ -574,9 +544,14 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             GoTo nextItem
         End If
 
-        Dim requestedQty As Long
-        requestedQty = pi.Count
-        If requestedQty <= 0 Then requestedQty = 1
+
+        Dim placements As Long
+        placements = pi.Count
+        If placements <= 0 Then placements = 1
+        If placements > 1 Then
+            LogMessage "[INFO] Qty " & pi.Count & " requested for " & GetFileName(pi.FullPath) & " (" & pi.Config & ") - placing " & placements & " instances"
+        End If
+
 
         If requestedQty > 1 Then
             LogMessage "[INFO] Qty " & requestedQty & " requested for " & GetFileName(pi.FullPath) & " (" & pi.Config & ") - nesting assembly limited to a single instance"
@@ -1805,12 +1780,9 @@ Private Sub WriteQuantityReportForPart(pr As clsPartRecord, _
         qtyOut = 1
     End If
 
-    Dim row As String
-    row = CsvCell(FormatThicknessLabel(thkIn)) & "," & _
-          CsvCell(GetFileName(pr.FullPath)) & "," & _
-          CsvCell(pr.Config) & "," & _
-          CsvCell(CStr(qtyOut))
-    Print #fnum, row
+
+    Print #fnum, FormatThicknessLabel(thkIn) & "," & GetFileName(pr.FullPath) & "," & pr.Config & "," & CStr(qtyOut)
+
 
     Close #fnum
     LogMessage "[TXT] Wrote quantity report -> " & reportPath
@@ -1824,28 +1796,6 @@ fail:
     LogMessage "[WARN] Failed to write quantity report: " & reportPath & " (" & errMsg & ")", True
 End Sub
 
-Private Sub CloseModelDoc(swApp As SldWorks.SldWorks, ByRef model As SldWorks.ModelDoc2, niceName As String)
-    On Error Resume Next
-    If model Is Nothing Then Exit Sub
-
-    Dim title As String
-    title = model.GetTitle
-
-    If Not swApp Is Nothing And Len(title) > 0 Then
-        swApp.CloseDoc title
-        LogMessage "[CLOSE] Closed document: " & title
-    Else
-        model.Quit
-        If Len(niceName) > 0 Then
-            LogMessage "[CLOSE] Quit document for " & niceName
-        Else
-            LogMessage "[CLOSE] Quit unnamed document"
-        End If
-    End If
-
-    Set model = Nothing
-    On Error GoTo 0
-End Sub
 
 Private Function CsvCell(value As String) As String
     Dim sanitized As String
