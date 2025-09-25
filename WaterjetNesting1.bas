@@ -180,6 +180,7 @@ Sub Waterjet_Nesting_Workflow()
             End If
             If nestAsmModel.GetType <> swDocASSEMBLY Then
                 LogMessage "Template mismatch: assembly template is not .asmdot", True
+
                 CloseModelDoc swApp, nestAsmModel, niceName
                 Set nestAsm = Nothing
                 On Error Resume Next
@@ -187,6 +188,7 @@ Sub Waterjet_Nesting_Workflow()
                 On Error GoTo 0
                 GoTo NextPart
             End If
+
             Dim nestAsm As SldWorks.AssemblyDoc: Set nestAsm = nestAsmModel
 
             ' ---- Force IPS units on the new assembly
@@ -202,6 +204,7 @@ Sub Waterjet_Nesting_Workflow()
             LogMessage "[SAVE] SaveAs4 err=" & e & " warn=" & w & " -> " & targetAsmPath
             If e <> 0 Then
                 LogMessage "[ERROR] Aborting output due to SaveAs4 failure for " & niceName, True
+
                 CloseModelDoc swApp, nestAsmModel, niceName
                 Set nestAsm = Nothing
                 On Error Resume Next
@@ -261,6 +264,7 @@ Sub Waterjet_Nesting_Workflow()
 
 NextPart:
         Next partIdx
+
 
 NextThickness:
     Next
@@ -574,6 +578,7 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             GoTo nextItem
         End If
 
+
         Dim requestedQty As Long
         requestedQty = pi.Count
         If requestedQty <= 0 Then requestedQty = 1
@@ -593,19 +598,28 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
                 rowH = 0
             End If
 
-            g_LastStep = "[PLACE] AddComponent5(x,y,z)"
-            Dim comp As SldWorks.Component2
-            Set comp = SafeAddComponent(nestAsm, pi.FullPath, pi.Config, cursorX, cursorY, 0#)
-            If comp Is Nothing Then
-                LogMessage "AddComponent failed: " & pi.FullPath & " (" & pi.Config & ")", True
-            Else
-                g_LastStep = "[PLACE] orient component"
-                OrientComponentForNesting nestAsm, comp, pi
-            End If
+
+        If cursorX > 0 And (cursorX + wM) > targetRowWidthM Then
+            cursorX = 0
+            cursorY = cursorY + rowH + gapM
+            rowH = 0
+        End If
+
+        g_LastStep = "[PLACE] AddComponent5(x,y,z)"
+        Dim comp As SldWorks.Component2
+        Set comp = SafeAddComponent(nestAsm, pi.FullPath, pi.Config, cursorX, cursorY, 0#)
+        If comp Is Nothing Then
+            LogMessage "AddComponent failed: " & pi.FullPath & " (" & pi.Config & ")", True
+        Else
+            g_LastStep = "[PLACE] orient component"
+            OrientComponentForNesting nestAsm, comp, pi
+        End If
+
 
             cursorX = cursorX + wM + gapM
             If hM > rowH Then rowH = hM
         Next q
+
 nextItem:
     Next i
 
@@ -1684,8 +1698,10 @@ End Function
 
 Private Function FormatThicknessLabel(thkIn As Double) As String
     Dim label As String
+
     label = Trim$(Format$(thkIn, "0.###"))
     If InStr(label, ",") > 0 Then label = Replace$(label, ",", ".")
+
     If Len(label) = 0 Then label = "0"
     FormatThicknessLabel = label & "in"
 End Function
@@ -1802,6 +1818,7 @@ Private Sub WriteQuantityReportForPart(pr As clsPartRecord, _
     Open reportPath For Output As #fnum
     Print #fnum, "SheetThickness,Part,Configuration,Quantity"
 
+
     Dim qtyOut As Long
     If pr.Qty > 0 Then
         qtyOut = pr.Qty
@@ -1850,6 +1867,13 @@ Private Sub CloseModelDoc(swApp As SldWorks.SldWorks, ByRef model As SldWorks.Mo
     Set model = Nothing
     On Error GoTo 0
 End Sub
+
+Private Function CsvCell(value As String) As String
+    Dim sanitized As String
+    sanitized = Replace$(value, """", """""")
+    CsvCell = """" & sanitized & """"
+End Function
+
 
 Private Function CsvCell(value As String) As String
     Dim sanitized As String
