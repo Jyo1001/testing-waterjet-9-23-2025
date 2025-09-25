@@ -180,8 +180,9 @@ Sub Waterjet_Nesting_Workflow()
             End If
             If nestAsmModel.GetType <> swDocASSEMBLY Then
                 LogMessage "Template mismatch: assembly template is not .asmdot", True
+
                 nestAsmModel.Quit: GoTo NextPart
-            End If
+             End If
             Dim nestAsm As SldWorks.AssemblyDoc: Set nestAsm = nestAsmModel
 
             ' ---- Force IPS units on the new assembly
@@ -198,6 +199,7 @@ Sub Waterjet_Nesting_Workflow()
             If e <> 0 Then
                 LogMessage "[ERROR] Aborting output due to SaveAs4 failure for " & niceName, True
                 nestAsmModel.Quit
+
                 GoTo NextPart
             End If
 
@@ -212,6 +214,7 @@ Sub Waterjet_Nesting_Workflow()
 
             ' Save after placement
             g_LastStep = "[SAVE] post-place"
+
             Dim errCode As Long: nestAsmModel.Save3 swSaveAsOptions_Silent, errCode, 0
             LogMessage "[SAVE] Save3 after placement err=" & errCode
             If errCode <> 0 Then
@@ -227,6 +230,7 @@ Sub Waterjet_Nesting_Workflow()
 
 NextPart:
         Next partIdx
+
 
 NextThickness:
     Next
@@ -532,13 +536,14 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
     Dim cursorX As Double, cursorY As Double, rowH As Double
     Dim targetRowWidthM As Double: targetRowWidthM = 60# * IN_TO_M
 
-    Dim i As Long, n As Long
+    Dim i As Long
     For i = 1 To items.Count
         Dim pi As clsPlaceItem: Set pi = items(i)
         If Len(pi.FullPath) = 0 Then
             LogMessage "Skip placement: empty file path for " & pi.Config
             GoTo nextItem
         End If
+
 
         Dim placements As Long
         placements = pi.Count
@@ -547,30 +552,32 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             LogMessage "[INFO] Qty " & pi.Count & " requested for " & GetFileName(pi.FullPath) & " (" & pi.Config & ") - placing " & placements & " instances"
         End If
 
-        For n = 1 To placements
-            Dim wM As Double: wM = pi.WidthIn * IN_TO_M
-            Dim hM As Double: hM = pi.HeightIn * IN_TO_M
 
+        If requestedQty > 1 Then
+            LogMessage "[INFO] Qty " & requestedQty & " requested for " & GetFileName(pi.FullPath) & " (" & pi.Config & ") - nesting assembly limited to a single instance"
+        End If
 
-            If cursorX > 0 And (cursorX + wM) > targetRowWidthM Then
-                cursorX = 0
-                cursorY = cursorY + rowH + gapM
-                rowH = 0
-            End If
+        Dim wM As Double: wM = pi.WidthIn * IN_TO_M
+        Dim hM As Double: hM = pi.HeightIn * IN_TO_M
 
-            g_LastStep = "[PLACE] AddComponent5(x,y,z)"
-            Dim comp As SldWorks.Component2
-            Set comp = SafeAddComponent(nestAsm, pi.FullPath, pi.Config, cursorX, cursorY, 0#)
-            If comp Is Nothing Then
-                LogMessage "AddComponent failed: " & pi.FullPath & " (" & pi.Config & ")", True
-            Else
-                g_LastStep = "[PLACE] orient component"
-                OrientComponentForNesting nestAsm, comp, pi
-            End If
+        If cursorX > 0 And (cursorX + wM) > targetRowWidthM Then
+            cursorX = 0
+            cursorY = cursorY + rowH + gapM
+            rowH = 0
+        End If
 
-            cursorX = cursorX + wM + gapM
-            If hM > rowH Then rowH = hM
-        Next n
+        g_LastStep = "[PLACE] AddComponent5(x,y,z)"
+        Dim comp As SldWorks.Component2
+        Set comp = SafeAddComponent(nestAsm, pi.FullPath, pi.Config, cursorX, cursorY, 0#)
+        If comp Is Nothing Then
+            LogMessage "AddComponent failed: " & pi.FullPath & " (" & pi.Config & ")", True
+        Else
+            g_LastStep = "[PLACE] orient component"
+            OrientComponentForNesting nestAsm, comp, pi
+        End If
+
+        cursorX = cursorX + wM + gapM
+        If hM > rowH Then rowH = hM
 nextItem:
     Next i
 
@@ -1773,8 +1780,9 @@ Private Sub WriteQuantityReportForPart(pr As clsPartRecord, _
         qtyOut = 1
     End If
 
+
     Print #fnum, FormatThicknessLabel(thkIn) & "," & GetFileName(pr.FullPath) & "," & pr.Config & "," & CStr(qtyOut)
- 
+
 
     Close #fnum
     LogMessage "[TXT] Wrote quantity report -> " & reportPath
@@ -1788,12 +1796,12 @@ fail:
     LogMessage "[WARN] Failed to write quantity report: " & reportPath & " (" & errMsg & ")", True
 End Sub
 
+
 Private Function CsvCell(value As String) As String
     Dim sanitized As String
     sanitized = Replace$(value, """", """""")
     CsvCell = """" & sanitized & """"
 End Function
-
 
 
 
