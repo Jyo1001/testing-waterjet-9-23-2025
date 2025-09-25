@@ -19,6 +19,9 @@ Private Const ORIENTATION_THICKNESS_TOL_IN As Double = 0.01
 Private Const ORIENTATION_AXIS_ALIGNMENT_TOL As Double = 0.001
 Private Const ORIENTATION_TOP_PLANE_TOL_IN As Double = 0.001
 
+' SolidWorks API enumeration (not exposed in enums for VBA projects by default)
+Private Const swAddComponentConfigOptions_UseNamedConfiguration As Long = 2
+
 ' ========= Globals (used by frmNest) =========
 Public g_SelectedIndices As Collection
 Public g_GapIn As Double
@@ -143,72 +146,89 @@ Sub Waterjet_Nesting_Workflow()
     Dim k As Variant
     For Each k In groups.Keys
         Dim thkIn As Double: thkIn = CDbl(k) / 1000#
-        Dim niceName As String: niceName = Format(thkIn, "0.###") & " in thick sheet"
-        LogMessage "Processing group: " & niceName
-
-        ' Build items list
-        g_LastStep = "[GROUP] MakePlacementList"
-        Dim items As Collection: Set items = MakePlacementList(groups(k))
-        If items.Count = 0 Then
-            LogMessage "No placeable items in group " & niceName
-            GoTo NextGroup
+        Dim groupParts As Collection: Set groupParts = groups(k)
+        If groupParts.Count = 0 Then
+            LogMessage "No placeable items in thickness group " & Format(thkIn, "0.###") & " in"
+            GoTo NextThickness
         End If
 
-        ' Create nesting assembly
-        g_LastStep = "[NEWDOC] NewDocument"
-        Dim nestAsmModel As SldWorks.ModelDoc2
-        Set nestAsmModel = swApp.NewDocument(asmTpl, 0, 0, 0)
-        If nestAsmModel Is Nothing Then
-            LogMessage "Failed to create assembly for " & niceName, True
-            GoTo NextGroup
-        End If
-        If nestAsmModel.GetType <> swDocASSEMBLY Then
-            LogMessage "Template mismatch: assembly template is not .asmdot", True
-            nestAsmModel.Quit: GoTo NextGroup
-        End If
-        Dim nestAsm As SldWorks.AssemblyDoc: Set nestAsm = nestAsmModel
+        Dim partIdx As Long
+        For partIdx = 1 To groupParts.Count
+            Dim prSingle As clsPartRecord
+            Set prSingle = groupParts(partIdx)
 
-        ' ---- Force IPS units on the new assembly
-        ForceUnitsIPS nestAsmModel
+            Dim niceName As String: niceName = BuildOutputBaseName(thkIn, prSingle)
+            LogMessage "Processing part: " & niceName
 
-        ' Save unique (silent)
-        g_LastStep = "[SAVE] SaveAs4"
-        Dim baseAsmPath As String: baseAsmPath = outFolder & "\" & SanitizeFileName(niceName) & ".SLDASM"
-        Dim targetAsmPath As String: targetAsmPath = UniqueTargetPath(baseAsmPath)
-        Dim e As Long, w As Long
-        nestAsmModel.SaveAs4 targetAsmPath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, e, w
-        LogMessage "[SAVE] SaveAs4 err=" & e & " warn=" & w & " -> " & targetAsmPath
-        If e <> 0 Then
-            LogMessage "[ERROR] Aborting group due to SaveAs4 failure for " & niceName, True
-            nestAsmModel.Quit
-            GoTo NextGroup
-        End If
+            ' Build items list for this single part
+            g_LastStep = "[GROUP] MakePlacementList"
+            Dim singleGroup As New Collection
+            singleGroup.Add prSingle
+            Dim items As Collection: Set items = MakePlacementList(singleGroup)
+            If items.Count = 0 Then
+                LogMessage "No placeable items for part " & prSingle.DisplayName
+                GoTo NextPart
+            End If
 
-        ' Emit quantity report alongside assembly/DXF outputs
-        Dim qtyReportPath As String
-        qtyReportPath = Replace$(targetAsmPath, ".SLDASM", ".txt")
-        WriteQuantityReportForGroup groups(k), qtyReportPath
+            ' Create nesting assembly
+            g_LastStep = "[NEWDOC] NewDocument"
+            Dim nestAsmModel As SldWorks.ModelDoc2
+            Set nestAsmModel = swApp.NewDocument(asmTpl, 0, 0, 0)
+            If nestAsmModel Is Nothing Then
+                LogMessage "Failed to create assembly for " & niceName, True
+                GoTo NextPart
+            End If
+            If nestAsmModel.GetType <> swDocASSEMBLY Then
+                LogMessage "Template mismatch: assembly template is not .asmdot", True
+                nestAsmModel.Quit: GoTo NextPart
+            End If
+            Dim nestAsm As SldWorks.AssemblyDoc: Set nestAsm = nestAsmModel
 
-        ' Place parts (coordinate-based, explicit config)
-        g_LastStep = "[PLACE] begin"
-        PlaceItemsGrid nestAsm, items, g_GapIn
+            ' ---- Force IPS units on the new assembly
+            ForceUnitsIPS nestAsmModel
 
-        ' Save after placement
-        g_LastStep = "[SAVE] post-place"
-        Dim errCode As Long: nestAsmModel.Save3 swSaveAsOptions_Silent, errCode, 0
-        LogMessage "[SAVE] Save3 after placement err=" & errCode
-        If errCode <> 0 Then
-            LogMessage "[ERROR] Aborting DXF export due to Save3 failure for " & niceName, True
-            nestAsmModel.Quit
-            GoTo NextGroup
-        End If
+            ' Save unique (silent)
+            g_LastStep = "[SAVE] SaveAs4"
+            Dim baseAsmPath As String
+            baseAsmPath = outFolder & "\" & SanitizeFileName(niceName) & ".SLDASM"
+            Dim targetAsmPath As String: targetAsmPath = UniqueTargetPath(baseAsmPath)
+            Dim e As Long, w As Long
+            nestAsmModel.SaveAs4 targetAsmPath, swSaveAsCurrentVersion, swSaveAsOptions_Silent, e, w
+            LogMessage "[SAVE] SaveAs4 err=" & e & " warn=" & w & " -> " & targetAsmPath
+            If e <> 0 Then
+                LogMessage "[ERROR] Aborting output due to SaveAs4 failure for " & niceName, True
+                nestAsmModel.Quit
+                GoTo NextPart
+            End If
 
-        ' Export top-view-only DXF at 1:1
-        g_LastStep = "[DXF] export"
-        Dim dxfPath As String: dxfPath = Replace$(targetAsmPath, ".SLDASM", ".DXF")
-        ExportAssemblyTopDXF swApp, drwTplDefault, targetAsmPath, dxfPath
+            ' Emit quantity report alongside assembly/DXF outputs
+            Dim qtyReportPath As String
+            qtyReportPath = Replace$(targetAsmPath, ".SLDASM", ".txt")
+            WriteQuantityReportForPart prSingle, thkIn, qtyReportPath
 
-NextGroup:
+            ' Place parts (coordinate-based, explicit config)
+            g_LastStep = "[PLACE] begin"
+            PlaceItemsGrid nestAsm, items, g_GapIn
+
+            ' Save after placement
+            g_LastStep = "[SAVE] post-place"
+            Dim errCode As Long: nestAsmModel.Save3 swSaveAsOptions_Silent, errCode, 0
+            LogMessage "[SAVE] Save3 after placement err=" & errCode
+            If errCode <> 0 Then
+                LogMessage "[ERROR] Aborting DXF export due to Save3 failure for " & niceName, True
+                nestAsmModel.Quit
+                GoTo NextPart
+            End If
+
+            ' Export top-view-only DXF at 1:1
+            g_LastStep = "[DXF] export"
+            Dim dxfPath As String: dxfPath = Replace$(targetAsmPath, ".SLDASM", ".DXF")
+            ExportAssemblyTopDXF swApp, drwTplDefault, targetAsmPath, dxfPath
+
+NextPart:
+        Next partIdx
+
+NextThickness:
     Next
 
     LogMessage "Waterjet nesting complete. Output: " & outFolder, True
@@ -440,7 +460,8 @@ Private Function SafeAddComponent(ByVal asmDoc As Object, _
     Dim r As Object
 
  
-    Set r = CallByName(asmDoc, "AddComponent5", VbMethod, filePath, 0, cfg, xM, yM, zM)
+    Set r = CallByName(asmDoc, "AddComponent5", VbMethod, filePath, _
+                       swAddComponentConfigOptions_UseNamedConfiguration, cfg, xM, yM, zM)
     If r Is Nothing Then
         Set r = CallByName(asmDoc, "AddComponent3", VbMethod, filePath, xM, yM, zM)
         If r Is Nothing Then
@@ -457,11 +478,48 @@ Private Function SafeAddComponent(ByVal asmDoc As Object, _
         If Len(gotPath) > 0 And StrComp(UCase$(gotPath), UCase$(filePath), vbTextCompare) <> 0 Then
             LogMessage "[WARN] Added a different file than requested: " & gotPath & " vs " & filePath
         End If
+        EnsureComponentConfiguration r, cfg, filePath
         Set SafeAddComponent = r
     Else
         Set SafeAddComponent = Nothing
     End If
 End Function
+
+Private Sub EnsureComponentConfiguration(comp As SldWorks.Component2, _
+                                         cfg As String, _
+                                         sourcePath As String)
+    On Error Resume Next
+    If comp Is Nothing Then GoTo done
+    If Len(cfg) = 0 Then GoTo done
+
+    Dim current As String
+    current = comp.ReferencedConfiguration
+    If StrComp(current, cfg, vbTextCompare) = 0 Then GoTo done
+
+    CallByName comp, "ReferencedConfiguration", VbLet, cfg
+    If Err.Number <> 0 Then
+        Err.Clear
+        CallByName comp, "SetReferencedConfigurationByName2", VbMethod, cfg, False, 1
+    End If
+
+    If Err.Number <> 0 Then
+        Err.Clear
+        CallByName comp, "SetConfigurationAndDisplayState", VbMethod, cfg, "", False, 1
+    End If
+
+    If Err.Number <> 0 Then
+        Err.Clear
+        CallByName comp, "SetConfiguration2", VbMethod, cfg
+    End If
+
+    current = comp.ReferencedConfiguration
+    If StrComp(current, cfg, vbTextCompare) <> 0 Then
+        LogMessage "[WARN] Unable to force configuration '" & cfg & "' for component from " & sourcePath
+    End If
+
+done:
+    On Error GoTo 0
+End Sub
 
 ' =========================
 '  NESTING / PLACEMENT (no transforms)
@@ -482,9 +540,11 @@ Private Sub PlaceItemsGrid(nestAsm As SldWorks.AssemblyDoc, _
             GoTo nextItem
         End If
 
-        Dim placements As Long: placements = 1
-        If pi.Count > 1 Then
-            LogMessage "[INFO] Qty " & pi.Count & " requested for " & GetFileName(pi.FullPath) & " (" & pi.Config & ") - placing single instance"
+        Dim placements As Long
+        placements = pi.Count
+        If placements <= 0 Then placements = 1
+        If placements > 1 Then
+            LogMessage "[INFO] Qty " & pi.Count & " requested for " & GetFileName(pi.FullPath) & " (" & pi.Config & ") - placing " & placements & " instances"
         End If
 
         For n = 1 To placements
@@ -1587,6 +1647,37 @@ Public Function BuildDisplayText(pr As clsPartRecord) As String
     BuildDisplayText = GetFileName(pr.FullPath) & " (" & pr.Config & ")  [" & ShortFolder(pr.FullPath) & "]"
 End Function
 
+Private Function FormatThicknessLabel(thkIn As Double) As String
+    Dim label As String
+    label = Trim$(Format(thkIn, "0.###"))
+    If Len(label) = 0 Then label = "0"
+    FormatThicknessLabel = label & "in"
+End Function
+
+Private Function GetFileStem(ByVal p As String) As String
+    Dim nameOnly As String: nameOnly = GetFileName(p)
+    Dim dotPos As Long: dotPos = InStrRev(nameOnly, ".")
+    If dotPos > 1 Then
+        GetFileStem = Left$(nameOnly, dotPos - 1)
+    Else
+        GetFileStem = nameOnly
+    End If
+End Function
+
+Public Function BuildOutputBaseName(thkIn As Double, pr As clsPartRecord) As String
+    Dim partStem As String: partStem = GetFileStem(pr.FullPath)
+    If Len(partStem) = 0 Then partStem = "Part"
+
+    Dim qtyLabel As String
+    If pr.Qty > 0 Then
+        qtyLabel = CStr(pr.Qty)
+    Else
+        qtyLabel = "1"
+    End If
+
+    BuildOutputBaseName = FormatThicknessLabel(thkIn) & "-" & partStem & "-" & qtyLabel
+End Function
+
 Private Sub DumpAllPartsForUI()
     Dim i As Long
     For i = 1 To g_AllParts.Count
@@ -1665,19 +1756,29 @@ Public Function MakePlacementList(thkGroup As Collection) As Collection
     Set MakePlacementList = L
 End Function
 
-Private Sub WriteQuantityReportForGroup(thkGroup As Collection, reportPath As String)
+Private Sub WriteQuantityReportForPart(pr As clsPartRecord, _
+                                       thkIn As Double, _
+                                       reportPath As String)
     On Error GoTo fail
 
     Dim fnum As Integer
     fnum = FreeFile
     Open reportPath For Output As #fnum
-    Print #fnum, "Part,Configuration,Quantity"
+    Print #fnum, "SheetThickness,Part,Configuration,Quantity"
 
-    Dim i As Long
-    For i = 1 To thkGroup.Count
-        Dim pr As clsPartRecord: Set pr = thkGroup(i)
-        Print #fnum, GetFileName(pr.FullPath) & "," & pr.Config & "," & CStr(pr.Qty)
-    Next i
+    Dim qtyOut As Long
+    If pr.Qty > 0 Then
+        qtyOut = pr.Qty
+    Else
+        qtyOut = 1
+    End If
+
+    Dim row As String
+    row = CsvCell(FormatThicknessLabel(thkIn)) & "," & _
+          CsvCell(GetFileName(pr.FullPath)) & "," & _
+          CsvCell(pr.Config) & "," & _
+          CsvCell(CStr(qtyOut))
+    Print #fnum, row
 
     Close #fnum
     LogMessage "[TXT] Wrote quantity report -> " & reportPath
@@ -1690,6 +1791,12 @@ fail:
     On Error GoTo 0
     LogMessage "[WARN] Failed to write quantity report: " & reportPath & " (" & errMsg & ")", True
 End Sub
+
+Private Function CsvCell(value As String) As String
+    Dim sanitized As String
+    sanitized = Replace$(value, """", """""")
+    CsvCell = """" & sanitized & """"
+End Function
 
 
 
